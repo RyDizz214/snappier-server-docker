@@ -1,12 +1,13 @@
 services:
   snappier-server:
     container_name: snappier-server-docker
-    image: ghcr.io/rydizz214/snappier-server:v1.0.0   # pull the specific version tag
+    image: ghcr.io/rydizz214/snappier-server:v1.1.0   # pull the specific version tag
     pull_policy: always
     ports:
       - "7429:8000"
     volumes:
       - /data/recordings/snappier-server:/data/recordings/snappier-server
+      - /etc/localtime:/etc/localtime:ro
 
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:8000 >/dev/null || exit 1"]

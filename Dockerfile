@@ -16,7 +16,7 @@ RUN apt-get update -qq && \
 # Download and unpack the Snappier-Server ELF binary
 WORKDIR /opt/snappier
 RUN wget -q \
-      https://snappierserver.app/files/snappierServer_full_linux_x86_64_v076_beta.zip \
+      https://snappierserver.app/files/snappierServer_full_linux_x86_64_v077c_beta.zip \
       -O snappier.zip && \
     unzip snappier.zip && \
     rm snappier.zip && \
