@@ -1,6 +1,5 @@
 # Snappier-Server Docker
 
-# Snappier-Server Docker
 
 A Dockerized Snappier-Server setup with automatic remux of `.ts` recordings to `.mkv` using FFmpeg. This image bundles Ubuntu 25.04, system FFmpeg (v7.1.1), timezone data, and your local SnappierServer ELF binary.
 
