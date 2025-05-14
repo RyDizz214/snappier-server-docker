@@ -1,89 +1,96 @@
 # Snappier-Server Docker
 
-A self-contained Docker setup for running Snappier-Server (ELF binary) with FFmpeg 7.1 on Ubuntu 25.04. It leverages the official `jrottenberg/ffmpeg:7.1-ubuntu` image for prebuilt FFmpeg, auto-acknowledges the initial “I understand” prompt, and includes a health check.
+# Snappier-Server Docker
 
-## Features
+A Dockerized Snappier-Server setup with automatic remux of `.ts` recordings to `.mkv` using FFmpeg. This image bundles Ubuntu 25.04, system FFmpeg (v7.1.1), timezone data, and your local SnappierServer ELF binary.
 
-* Uses the official `jrottenberg/ffmpeg:7.1-ubuntu` Docker image for FFmpeg 7.1
-* Downloads and renames the Snappier-Server ELF binary automatically
-* Auto-response to initial startup prompt
-* Built-in HTTP health check on `/` endpoint
-* Persistent storage for recordings via host-mounted volume
+## Contents
+
+* **Dockerfile**: Defines the image with:
+
+  * Ubuntu 25.04 base
+  * `ffmpeg` and `tzdata` installed via `apt`
+  * Timezone set to **America/New\_York**
+  * Local `snappierServer` ELF binary copied into `/opt/snappier`
+  * `entrypoint.sh` that launches `snappierServer` with `--enable-remux`
+* **entrypoint.sh**: Auto-completes the acknowledgement prompt and `exec`s the server binary.
+* **snappierServer\_full\_linux\_x86\_64\_v0.77c\_beta**: The SnappierServer ELF binary *you* download and place alongside this Dockerfile.
+* **docker-compose.yml** (optional): Example Compose file to run the container, mount your recordings folder, and expose port 7429.
 
 ## Prerequisites
 
-* Docker ≥ 20.10
-* Docker Compose ≥ 1.29
-* Git (for cloning this repository)
+* Docker & Docker Compose installed on your host.
+* A downloaded copy of the x86\_64 SnappierServer ELF:
 
-## Getting Started
+  1. Visit [https://snappierserver.app/files/](https://snappierserver.app/files/)
+  2. Download **snappierServer\_full\_linux\_x86\_64\_v0.77c\_beta.zip**
+  3. Unzip so you have a file named:
 
-1. **Clone the repository**:
+     ```
+     snappierServer_full_linux_x86_64_v0.77c_beta
+     ```
+  4. Move that file into this project directory (next to `Dockerfile`):
 
-   ```bash
-   git clone https://github.com/RyDizz214/snappier-server-docker.git
-   cd snappier-server-docker
-   ```
+     ```bash
+     mv snappierServer_full_linux_x86_64_v0.77c_beta ./
+     chmod +x snappierServer_full_linux_x86_64_v0.77c_beta
+     ```
 
-2. **Build and start the container**:
+## Running the Container
 
-   ```bash
-   docker-compose up -d
-   ```
+### Standalone `docker run`
 
-3. **Verify the service**:
-
-   * **API & UI**: [http://localhost:7429](http://localhost:7429)
-   * **Recordings** directory on host: `./recordings/`
-
-## Configuration
-
-* **Port**: 7429 (mapped host→container)
-* **Recordings paths**:
-
-  * `/data/recordings/snappier-server` (root recordings folder)
-  * `/data/recordings/snappier-server/movies` (movies)
-  * `/data/recordings/snappier-server/tvseries` (TV series)
-* **Health check**:
-
-  * HTTP probe every 30s
-  * 10s timeout, 3 retries, 30s startup grace
-
-## File Structure
-
-```
-snappier-server-docker/
-├── Dockerfile           # Multi-stage FFmpeg build & runtime image
-├── entrypoint.sh        # Auto-confirm prompt & launch server
-├── docker-compose.yml   # Compose service with ports, volumes, healthcheck
-├── .gitignore           # Excludes recordings/ and ZIP files
-├── README.md            # Project documentation
-└── LICENSE              # MIT License
+```bash
+docker run -d \
+  --name snappier-server \
+  -p 7429:8000 \
+  -v /data/recordings/snappier-server:/data/recordings/snappier-server \
+  -v /etc/localtime:/etc/localtime:ro \
+  ghcr.io/rydizz214/snappier-server:v1.1.0
 ```
 
-## Updating the Snappier-Server Binary
+### Using Docker Compose
 
-To bump to a newer Snappier-Server version:
+```yaml
+version: "3.8"
+services:
+  snappier-server:
+    image: ghcr.io/rydizz214/snappier-server:v1.1.0
+    container_name: snappier-server-docker
+    ports:
+      - "7429:8000"
+    volumes:
+      - "/data/recordings/snappier-server:/data/recordings/snappier-server"
+      - "/etc/localtime:/etc/localtime:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+```
 
-1. Edit the download URL in `Dockerfile` (under `/opt/snappier` stage):
+```bash
+docker compose up -d
+```
 
-   ```dockerfile
-   RUN wget -q https://snappierserver.app/files/snappierServer_full_linux_x86_64_v0XX_beta.zip -O snappier.zip
-   ```
-2. Rebuild and redeploy:
+## Usage & Verification
+
+1. **Verify remux flag**
 
    ```bash
-   docker-compose up -d
+   docker exec -it snappier-server-docker \
+     sh -c "tr '�' ' ' < /proc/1/cmdline; echo"
    ```
 
-## Contributing
+   Confirm you see `--enable-remux` in the command line.
 
-1. Fork this repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -m "Add new feature"`)
-4. Push to your fork (`git push origin feature/my-feature`)
-5. Open a Pull Request
+2. **Check the output**
+
+   ```bash
+   ls -lh /data/recordings/snappier-server/*.mkv
+   ```
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project and Dockerfile are provided under the MIT License. See [LICENSE](LICENSE).
