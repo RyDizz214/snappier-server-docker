@@ -1,0 +1,16 @@
+# Ignore recordings and local artifacts
+
+recordings/
+
+# Ignore downloaded zip files
+
+\*.zip
+
+# OS-specific files
+
+.DS\_Store
+
+# Logs
+
+\*.log
+
