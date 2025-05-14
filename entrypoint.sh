@@ -13,3 +13,4 @@ printf 'I understand\n' | \
     --recordingsFolder /data/recordings/snappier-server \
     --moviesFolder    /data/recordings/snappier-server/movies \
     --tvSeriesFolder  /data/recordings/snappier-server/tvseries
+    --enabler-remux
