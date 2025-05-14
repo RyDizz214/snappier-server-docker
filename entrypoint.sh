@@ -8,9 +8,9 @@ mkdir -p /data/recordings/snappier-server/movies \
 # auto-confirm and launch the ELF binary on port 8000
 printf 'I understand\n' | \
   exec /opt/snappier/snappierServer \
-    --host 0.0.0.0 \
-    --port 8000 \
+    --host            0.0.0.0 \
+    --port            8000 \
     --recordingsFolder /data/recordings/snappier-server \
-    --moviesFolder    /data/recordings/snappier-server/movies \
-    --tvSeriesFolder  /data/recordings/snappier-server/tvseries
-    --enabler-remux
+    --moviesFolder     /data/recordings/snappier-server/movies \
+    --tvSeriesFolder   /data/recordings/snappier-server/tvseries \
+    --enable-remux
