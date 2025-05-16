@@ -21,7 +21,7 @@ A Dockerized Snappier-Server setup with automatic remux of `.ts` recordings to `
 * Docker & Docker Compose installed on your host.
 * A downloaded copy of the x86\_64 SnappierServer ELF:
 
-  1. Visit [https://snappierserver.app/files/](https://snappierserver.app/files/)
+  1. Visit [https://snappierserver.app/#downloads](https://snappierserver.app/#downloads)
   2. Download **snappierServer\_full\_linux\_x86\_64\_v0.77c\_beta.zip**
   3. Unzip so you have a file named:
 
