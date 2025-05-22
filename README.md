@@ -30,12 +30,12 @@ A Docker image that packages the Snappier-Server CLI (v0.8.0m) on Ubuntu 25.04 w
 ```bash
 # From the project root
 docker build \
-  --tag ryandizz214/snappier-server:0.8.0m \
+  --tag rydizz214/snappier-server:0.8.0m \
   --build-arg TZ="America/New_York" \
   .
 ```
 
-This creates an image named `ryandizz214/snappier-server:0.8.0m` containing:
+This creates an image named `rydizz214/snappier-server:0.8.0m` containing:
 
 * `/usr/local/bin/snappier-server` (the CLI)
 * FFmpeg binaries in `/usr/bin/ffmpeg` & `/usr/bin/ffprobe`
@@ -50,7 +50,7 @@ Run with default settings:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  ryandizz214/snappier-server:0.8.0m
+  rydizz214/snappier-server:0.8.0m
 ```
 
 ### Customizing via Environment Variables
@@ -76,7 +76,7 @@ docker run -d \
   -v /host/movies:/root/SnappierServer/movies \
   -v /host/series:/root/SnappierServer/series \
   -v /host/pvr:/root/SnappierServer/pvr \
-  ryandizz214/snappier-server:0.8.0m
+  rydizz214/snappier-server:0.8.0m
 ```
 
 ---
