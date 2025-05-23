@@ -63,7 +63,7 @@ docker run -d \
 | `MOVIES_FOLDER`            | `/root/SnappierServer/movies`     | Subfolder for movie recordings     |
 | `SERIES_FOLDER`            | `/root/SnappierServer/series`     | Subfolder for TV series recordings |
 | `PVR_FOLDER`               | `/root/SnappierServer/pvr`        | Subfolder for PVR recordings       |
-| `DOWNLOAD_SPEED_LIMIT_MBS` | `10` default - '0' to disable     | Max download speed in MB/s         |
+| `DOWNLOAD_SPEED_LIMIT_MBS` | `10`      '0' to disable          | Max download speed in MB/s         |
 
 Example with volume mounts and custom remux setting:
 
