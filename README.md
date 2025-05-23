@@ -147,6 +147,3 @@ Any existing data in these host folders will be visible inside the container.
 ## License
 
 This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
-
-```
-```
