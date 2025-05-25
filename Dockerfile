@@ -21,7 +21,7 @@ RUN apt-get update \
 FROM base AS snappier-server
 ARG TARGETARCH
 
-# download & install Snappier-Server v0.8.0p CLI
+# download & install Snappier-Server v0.8.0q CLI
 RUN case "$TARGETARCH" in \
       "amd64") PLATFORM="x64" ;; \
       "arm64") PLATFORM="arm64" ;; \
@@ -35,7 +35,7 @@ RUN case "$TARGETARCH" in \
  && chmod +x /opt/snappier-server/snappier-server \
  && ln -sf /opt/snappier-server/snappier-server /usr/local/bin/snappier-server \
  && rm /tmp/snappier.zip \
- && echo "✅ Snappier-Server v0.8.0p installed!"
+ && echo "✅ Snappier-Server v0.8.0q installed!"
 
 # data dirs & expose port
 RUN mkdir -p /root/SnappierServer/{Recordings,Movies,Series,PVR}
