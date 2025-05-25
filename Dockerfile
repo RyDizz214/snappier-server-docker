@@ -27,7 +27,7 @@ RUN case "$TARGETARCH" in \
       "arm64") PLATFORM="arm64" ;; \
       *) echo "❌ Unsupported ARCH: $TARGETARCH" >&2 && exit 1 ;; \
     esac \
- && ASSET="snappier-server-cli-v0.8.0p-linux-${PLATFORM}.zip" \
+ && ASSET="snappier-server-cli-v0.8.0q-linux-${PLATFORM}.zip" \
  && curl -fSL "https://snappierserver.app/files/${ASSET}" -o /tmp/snappier.zip \
  && mkdir -p /opt/snappier-server \
  && unzip -q /tmp/snappier.zip -d /opt/snappier-server \
