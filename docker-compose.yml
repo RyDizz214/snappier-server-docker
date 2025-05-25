@@ -17,7 +17,7 @@ services:
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"
       SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
       PVR_FOLDER:               "/root/SnappierServer/PVR"
-      DOWNLOAD_SPEED_LIMIT_MBS: "50"
+      DOWNLOAD_SPEED_LIMIT_MBS: "10"
 
     volumes:
       - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
