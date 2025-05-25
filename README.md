@@ -35,7 +35,7 @@ docker build \
   .
 ```
 
-This creates an image named `rydizz214/snappier-server:0.8.0m` containing:
+This creates an image named `rydizz214/snappier-server:0.8.0p` containing:
 
 * `/usr/local/bin/snappier-server` (the CLI)
 * FFmpeg binaries in `/usr/bin/ffmpeg` & `/usr/bin/ffprobe`
