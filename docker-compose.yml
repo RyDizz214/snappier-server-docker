@@ -5,8 +5,8 @@ services:
     build:
       context: .
       args:
-        SNAPPIER_VERSION: "0.8.0m"
-    image: rydizz214/snappier-server:0.8.0m
+        SNAPPIER_VERSION: "0.8.0p"
+    image: rydizz214/snappier-server:0.8.0p
     container_name: snappier-server
     restart: unless-stopped
 
@@ -17,7 +17,7 @@ services:
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"
       SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
       PVR_FOLDER:               "/root/SnappierServer/PVR"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
+      DOWNLOAD_SPEED_LIMIT_MBS: "50"
 
     volumes:
       - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
