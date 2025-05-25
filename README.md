@@ -1,6 +1,6 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v0.8.0m) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+A Docker image that packages the Snappier-Server CLI (v0.8.0p) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
 1. **Base stage**: installs runtime dependencies, FFmpeg, and configures timezone.
 2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture.
@@ -9,7 +9,7 @@ A Docker image that packages the Snappier-Server CLI (v0.8.0m) on Ubuntu 25.04 w
 
 ## Features
 
-* **Snappier-Server CLI v0.8.0m** for Linux (amd64 & arm64)
+* **Snappier-Server CLI v0.8.0p** for Linux (amd64 & arm64)
 * **FFmpeg** installed via `apt` for encoding/decoding support
 * **Timezone support** (default `America/New_York`, override via `TZ` build arg)
 * **Exposed HTTP port 8000** for API/UI
@@ -30,7 +30,7 @@ A Docker image that packages the Snappier-Server CLI (v0.8.0m) on Ubuntu 25.04 w
 ```bash
 # From the project root
 docker build \
-  --tag rydizz214/snappier-server:0.8.0m \
+  --tag rydizz214/snappier-server:0.8.0p \
   --build-arg TZ="America/New_York" \
   .
 ```
@@ -50,7 +50,7 @@ Run with default settings:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  rydizz214/snappier-server:0.8.0m
+  rydizz214/snappier-server:0.8.0p
 ```
 
 ### Customizing via Environment Variables
@@ -76,7 +76,7 @@ docker run -d \
   -v /host/movies:/root/SnappierServer/movies \
   -v /host/series:/root/SnappierServer/series \
   -v /host/pvr:/root/SnappierServer/pvr \
-  rydizz214/snappier-server:0.8.0m
+  rydizz214/snappier-server:0.8.0p
 ```
 
 ---
@@ -91,8 +91,8 @@ services:
     build:
       context: .
       args:
-        SNAPPIER_VERSION: "0.8.0m"
-    image: rydizz214/snappier-server:0.8.0m
+        SNAPPIER_VERSION: "0.8.0p"
+    image: rydizz214/snappier-server:0.8.0p
     container_name: snappier-server
     restart: unless-stopped
 
