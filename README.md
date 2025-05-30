@@ -1,25 +1,16 @@
 # Snappier-Server Docker
 
-<<<<<<< HEAD
-A Docker image that packages the Snappier-Server CLI (v0.8.0q) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
-=======
-A Docker image that packages the Snappier-Server CLI (v0.8.0q) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
->>>>>>> origin/main
+A Docker image that packages the Snappier-Server CLI (v0.8.0r) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
-1. **Base stage**: installs runtime dependencies, FFmpeg, and configures timezone.
+1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
 2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture.
 
 ---
 
 ## Features
 
-<<<<<<< HEAD
-* **Snappier-Server CLI v0.8.0q** for Linux (amd64 & arm64)
+* **Snappier-Server CLI v0.8.0r** for Linux (amd64 & arm64)
 * **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
-=======
-* **Snappier-Server CLI v0.8.0q** for Linux (amd64 & arm64)
-* **FFmpeg** installed via `apt` for encoding/decoding support
->>>>>>> origin/main
 * **Timezone support** (default `America/New_York`, override via `TZ` build arg)
 * **Exposed HTTP port 8000** for API/UI
 * **Persistent volumes** for Recordings, Movies, Series, and PVR
@@ -39,20 +30,15 @@ A Docker image that packages the Snappier-Server CLI (v0.8.0q) on Ubuntu 25.04 w
 ```bash
 # From the project root
 docker build \
-<<<<<<< HEAD
-  --tag rydizz214/snappier-server:0.8.0q \
-=======
-  --tag rydizz214/snappier-server:0.8.0q \
+  --tag rydizz214/snappier-server:0.8.0r \
 >>>>>>> origin/main
   --build-arg TZ="America/New_York" \
   .
 ```
 
-<<<<<<< HEAD
-This creates an image named `rydizz214/snappier-server:0.8.0q` containing:
-=======
-This creates an image named `rydizz214/snappier-server:0.8.0q` containing:
->>>>>>> origin/main
+
+This creates an image named `rydizz214/snappier-server:0.8.0r` containing:
+
 
 * `/usr/local/bin/snappier-server` (the CLI)
 * FFmpeg binaries in `/usr/bin/ffmpeg` & `/usr/bin/ffprobe`
@@ -67,11 +53,7 @@ Run with default settings:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-<<<<<<< HEAD
-  rydizz214/snappier-server:0.8.0q
-=======
-  rydizz214/snappier-server:0.8.0q
->>>>>>> origin/main
+  rydizz214/snappier-server:0.8.0r
 ```
 
 ### Customizing via Environment Variables
@@ -97,11 +79,7 @@ docker run -d \
   -v /host/movies:/root/SnappierServer/movies \
   -v /host/series:/root/SnappierServer/series \
   -v /host/pvr:/root/SnappierServer/pvr \
-<<<<<<< HEAD
-  rydizz214/snappier-server:0.8.0q
-=======
-  rydizz214/snappier-server:0.8.0q
->>>>>>> origin/main
+  rydizz214/snappier-server:0.8.0r
 ```
 
 ---
@@ -116,13 +94,8 @@ services:
     build:
       context: .
       args:
-<<<<<<< HEAD
-        SNAPPIER_VERSION: "0.8.0q"
-    image: rydizz214/snappier-server:0.8.0q
-=======
-        SNAPPIER_VERSION: "0.8.0q"
-    image: rydizz214/snappier-server:0.8.0q
->>>>>>> origin/main
+        SNAPPIER_VERSION: "0.8.0r"
+    image: rydizz214/snappier-server:0.8.0r
     container_name: snappier-server
     restart: unless-stopped
 
@@ -133,7 +106,7 @@ services:
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"
       SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
       PVR_FOLDER:               "/root/SnappierServer/PVR"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
+      DOWNLOAD_SPEED_LIMIT_MBS: "5"
 
     volumes:
       - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
