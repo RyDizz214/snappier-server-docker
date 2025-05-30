@@ -5,8 +5,8 @@ services:
     build:
       context: .
       args:
-        SNAPPIER_VERSION: "0.8.0q"
-    image: rydizz214/snappier-server:0.8.0q
+        SNAPPIER_VERSION: "0.8.0r"
+    image: rydizz214/snappier-server:0.8.0r
     container_name: snappier-server
     restart: unless-stopped
 
@@ -17,7 +17,7 @@ services:
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"
       SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
       PVR_FOLDER:               "/root/SnappierServer/PVR"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
+      DOWNLOAD_SPEED_LIMIT_MBS: "5"
 
     volumes:
       - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
@@ -31,14 +31,16 @@ services:
       - "7429:8000"
 
     healthcheck:
-      test: [
-        "CMD",
-        "curl", "-f", "-X", "GET",
-        "http://127.0.0.1:8000/serverStats",
-        "-H", "Accept: application/json"
-      ]
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "-X"
+        - "GET"
+        - "http://127.0.0.1:8000/serverStats"
+        - "-H"
+        - "Accept: application/json"
       interval: 60s
       timeout: 5s
       retries: 3
       # ⚠️ If you change API_PORT from 8000, update the URL here.
-

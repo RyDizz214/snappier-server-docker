@@ -1,16 +1,16 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v0.8.0q) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+A Docker image that packages the Snappier-Server CLI (v0.8.0r) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
-1. **Base stage**: installs runtime dependencies, FFmpeg, and configures timezone.
+1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
 2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture.
 
 ---
 
 ## Features
 
-* **Snappier-Server CLI v0.8.0q** for Linux (amd64 & arm64)
-* **FFmpeg** installed via `apt` for encoding/decoding support
+* **Snappier-Server CLI v0.8.0r** for Linux (amd64 & arm64)
+* **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
 * **Timezone support** (default `America/New_York`, override via `TZ` build arg)
 * **Exposed HTTP port 8000** for API/UI
 * **Persistent volumes** for Recordings, Movies, Series, and PVR
@@ -30,12 +30,12 @@ A Docker image that packages the Snappier-Server CLI (v0.8.0q) on Ubuntu 25.04 w
 ```bash
 # From the project root
 docker build \
-  --tag rydizz214/snappier-server:0.8.0q \
+  --tag rydizz214/snappier-server:0.8.0r \
   --build-arg TZ="America/New_York" \
   .
 ```
 
-This creates an image named `rydizz214/snappier-server:0.8.0q` containing:
+This creates an image named `rydizz214/snappier-server:0.8.0r` containing:
 
 * `/usr/local/bin/snappier-server` (the CLI)
 * FFmpeg binaries in `/usr/bin/ffmpeg` & `/usr/bin/ffprobe`
@@ -50,7 +50,7 @@ Run with default settings:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  rydizz214/snappier-server:0.8.0q
+  rydizz214/snappier-server:0.8.0r
 ```
 
 ### Customizing via Environment Variables
@@ -63,7 +63,7 @@ docker run -d \
 | `MOVIES_FOLDER`            | `/root/SnappierServer/movies`     | Subfolder for movie recordings     |
 | `SERIES_FOLDER`            | `/root/SnappierServer/series`     | Subfolder for TV series recordings |
 | `PVR_FOLDER`               | `/root/SnappierServer/pvr`        | Subfolder for PVR recordings       |
-| `DOWNLOAD_SPEED_LIMIT_MBS` | `10`      '0' to disable          | Max download speed in MB/s         |
+| `DOWNLOAD_SPEED_LIMIT_MBS` | `5` (set to `0` to disable)       | Max download speed in MB/s         |
 
 Example with volume mounts and custom remux setting:
 
@@ -76,7 +76,7 @@ docker run -d \
   -v /host/movies:/root/SnappierServer/movies \
   -v /host/series:/root/SnappierServer/series \
   -v /host/pvr:/root/SnappierServer/pvr \
-  rydizz214/snappier-server:0.8.0q
+  rydizz214/snappier-server:0.8.0r
 ```
 
 ---
@@ -91,8 +91,8 @@ services:
     build:
       context: .
       args:
-        SNAPPIER_VERSION: "0.8.0q"
-    image: rydizz214/snappier-server:0.8.0q
+        SNAPPIER_VERSION: "0.8.0r"
+    image: rydizz214/snappier-server:0.8.0r
     container_name: snappier-server
     restart: unless-stopped
 
@@ -103,7 +103,7 @@ services:
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"
       SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
       PVR_FOLDER:               "/root/SnappierServer/PVR"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
+      DOWNLOAD_SPEED_LIMIT_MBS: "5"
 
     volumes:
       - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
@@ -117,12 +117,15 @@ services:
       - "7429:8000"
 
     healthcheck:
-      test: [
-        "CMD",
-        "curl", "-f", "-X", "GET",
-        "http://127.0.0.1:8000/serverStats",
-        "-H", "Accept: application/json"
-      ]
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "-X"
+        - "GET"
+        - "http://127.0.0.1:8000/serverStats"
+        - "-H"
+        - "Accept: application/json"
       interval: 60s
       timeout: 5s
       retries: 3
