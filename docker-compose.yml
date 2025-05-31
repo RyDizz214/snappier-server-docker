@@ -6,12 +6,13 @@ services:
       context: .
       args:
         SNAPPIER_VERSION: "0.8.0r"
-    image: rydizz214/snappier-server:0.8.0r
+    image: ghcr.io/rydizz214/snappier-server:0.8.0s
     container_name: snappier-server
     restart: unless-stopped
 
     environment:
       PORT:                     "8000"
+      USE_FFMPEG_TO_DOWNLOAD:   "true"
       ENABLE_REMUX:             "true"
       RECORDINGS_FOLDER:        "/root/SnappierServer/Recordings"
       MOVIES_FOLDER:            "/root/SnappierServer/Movies"

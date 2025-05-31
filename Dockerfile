@@ -21,13 +21,13 @@ RUN apt-get update \
 FROM base AS snappier-server
 ARG TARGETARCH
 
-# download & install Snappier-Server v0.8.0r CLI
+# download & install Snappier-Server v0.8.0s CLI
 RUN case "$TARGETARCH" in \
       "amd64") PLATFORM="x64" ;; \
       "arm64") PLATFORM="arm64" ;; \
       *) echo "❌ Unsupported ARCH: $TARGETARCH" >&2 && exit 1 ;; \
     esac \
- && ASSET="snappier-server-cli-v0.8.0r-linux-${PLATFORM}.zip" \
+ && ASSET="snappier-server-cli-v0.8.0s-linux-${PLATFORM}.zip" \
  && curl -fSL "https://snappierserver.app/files/${ASSET}" -o /tmp/snappier.zip \
  && mkdir -p /opt/snappier-server \
  && unzip -q /tmp/snappier.zip -d /opt/snappier-server \
@@ -35,7 +35,7 @@ RUN case "$TARGETARCH" in \
  && chmod +x /opt/snappier-server/snappier-server \
  && ln -sf /opt/snappier-server/snappier-server /usr/local/bin/snappier-server \
  && rm /tmp/snappier.zip \
- && echo "✅ Snappier-Server v0.8.0r installed!"
+ && echo "✅ Snappier-Server v0.8.0s installed!"
 
 # data dirs & expose port
 RUN mkdir -p /root/SnappierServer/{Recordings,Movies,Series,PVR}
@@ -46,10 +46,10 @@ EXPOSE 8000
 # default env vars (override with -e)
 ENV PORT=7429:8000 \
     ENABLE_REMUX=true \
+    USE_FFMPEG_TO_DOWNLOAD=true \
     RECORDINGS_FOLDER=/root/SnappierServer/recordings \
     MOVIES_FOLDER=/root/SnappierServer/movies \
     SERIES_FOLDER=/root/SnappierServer/series \
     PVR_FOLDER=/root/SnappierServer/pvr \
-    DOWNLOAD_SPEED_LIMIT_MBS=5
 
 ENTRYPOINT ["snappier-server"]
