@@ -5,8 +5,8 @@ services:
     build:
       context: .
       args:
-        SNAPPIER_VERSION: "0.8.0r"
-    image: ghcr.io/rydizz214/snappier-server:0.8.0s
+        SNAPPIER_VERSION: "0.8.0t"
+    image: ghcr.io/rydizz214/snappier-server:0.8.0t
     container_name: snappier-server
     restart: unless-stopped
 

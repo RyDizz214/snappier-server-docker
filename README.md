@@ -1,6 +1,6 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v0.0.0s) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+A Docker image that packages the Snappier-Server CLI (v0.8.0t) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
 1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
 2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture.
@@ -9,7 +9,7 @@ A Docker image that packages the Snappier-Server CLI (v0.0.0s) on Ubuntu 25.04 w
 
 ## Features
 
-* **Snappier-Server CLI v0.0.0s** for Linux (amd64 & arm64)
+* **Snappier-Server CLI v0.8.0t** for Linux (amd64 & arm64)
 * **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
 * **Timezone support** (default `America/New_York`, override via `TZ` build arg)
 * **Exposed HTTP port 8000** for API/UI
@@ -30,17 +30,18 @@ A Docker image that packages the Snappier-Server CLI (v0.0.0s) on Ubuntu 25.04 w
 ```bash
 # From the project root
 docker build \
-  --tag ghcr.io/rydizz214/snappier-server:0.0.0s \
   --build-arg TZ="America/New_York" \
+  --build-arg SNAPPIER_VERSION=0.8.0t \
+  -t ghcr.io/rydizz214/snappier-server:0.8.0t \
   .
 ```
 
-This creates an image named `ghcr.io/rydizz214/snappier-server:0.0.0s` containing:
+This creates an image named `ghcr.io/rydizz214/snappier-server:0.8.0t` containing:
 
 * `/usr/local/bin/snappier-server` (the CLI)
 * FFmpeg binaries in `/usr/bin/ffmpeg` & `/usr/bin/ffprobe`
 
-> **Tip:** If you’ve already pulled the previous `ghcr.io/rydizz214/snappier-server:0.8.0r` image, run `docker rmi ghcr.io/rydizz214/snappier-server:0.8.0r` before rebuilding to avoid confusion.
+> **Tip:** If you’ve already pulled the previous `ghcr.io/rydizz214/snappier-server:0.8.0s` image, run `docker rmi ghcr.io/rydizz214/snappier-server:0.8.0s` before rebuilding to avoid confusion.
 
 ---
 
@@ -75,7 +76,7 @@ Run with default settings:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  ghcr.io/rydizz214/snappier-server:0.0.0s
+  ghcr.io/rydizz214/snappier-server:0.8.0t
 ```
 
 ### Customizing via Environment Variables
@@ -104,20 +105,20 @@ docker run -d \
   -v /host/movies:/root/SnappierServer/movies \
   -v /host/series:/root/SnappierServer/series \
   -v /host/pvr:/root/SnappierServer/pvr \
-  ghcr.io/rydizz214/snappier-server:0.0.0s
+  ghcr.io/rydizz214/snappier-server:0.8.0t
 ```
 
 ---
 
 ## Using Docker Compose
 
-You can manage your Snappier-Server with Docker Compose. Below is an example `docker-compose.yml` that builds (or pulls) the image tagged `0.0.0s` and binds your host folders into the container. Adjust environment options to meet your specific needs.
+You can manage your Snappier-Server with Docker Compose. Below is an example `docker-compose.yml` that builds (or pulls) the image tagged `0.8.0t` and binds your host folders into the container. Adjust environment options to meet your specific needs.
 
 ```yaml
 version: "3.8"
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server:0.0.0s
+    image: ghcr.io/rydizz214/snappier-server:0.8.0t
     container_name: snappier-server
     restart: unless-stopped
 
