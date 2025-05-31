@@ -46,7 +46,8 @@ EXPOSE 8000
 # default env vars (override with -e)
 ENV PORT=8000 \
     ENABLE_REMUX=true \
-    USE_FFMPEG_TO_DOWNLOAD=true \
+    USE_FFMPEG_TO_DOWNLOAD=false \
+    DOWNLOAD_SPEED_LIMIT_MBS=10 \
     RECORDINGS_FOLDER=/root/SnappierServer/recordings \
     MOVIES_FOLDER=/root/SnappierServer/movies \
     SERIES_FOLDER=/root/SnappierServer/series \
