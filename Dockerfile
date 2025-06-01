@@ -38,20 +38,19 @@ RUN case "$TARGETARCH" in \
  && echo "✅ Snappier-Server v0.8.0t installed!"
 
 # data dirs & expose port
-RUN mkdir -p /root/SnappierServer/{Recordings,Movies,Series,PVR}
-VOLUME ["/root/SnappierServer/recordings","/root/SnappierServer/movies","/root/SnappierServer/series","/root/SnappierServer/pvr"]
+RUN mkdir -p /root/SnappierServer/{Recordings,Movies,TVSeries,PVR}
+VOLUME ["/root/SnappierServer/Recordings","/root/SnappierServer/Movies","/root/SnappierServer/Series","/root/SnappierServer/PVR"]
 WORKDIR /root/SnappierServer
 EXPOSE 8000
 
 # default env vars (override with -e)
-ENV PORT=8000 \
+    ENV PORT=7429:8000 \
     ENABLE_REMUX=true \
     USE_FFMPEG_TO_DOWNLOAD=false \
-    DOWNLOAD_SPEED_LIMIT_MBS=10 \
-    RECORDINGS_FOLDER=/root/SnappierServer/recordings \
-    MOVIES_FOLDER=/root/SnappierServer/movies \
-    SERIES_FOLDER=/root/SnappierServer/series \
-    PVR_FOLDER=/root/SnappierServer/pvr
+    RECORDINGS_FOLDER=/root/SnappierServer/Recordings \
+    MOVIES_FOLDER=/root/SnappierServer/Movies \
+    SERIES_FOLDER=/root/SnappierServer/TVSeries \
+    PVR_FOLDER=/root/SnappierServer/PVR \
+    DOWNLOAD_SPEED_LIMIT_MBS=10
 
 ENTRYPOINT ["snappier-server"]
-
