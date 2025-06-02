@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:0.0.0t
+    image: ghcr.io/rydizz214/snappier-server-docker:0.0.0v
     container_name: snappier-server
     restart: unless-stopped
 
@@ -13,20 +13,21 @@ services:
       PORT: "8000"
       ENABLE_REMUX: "true"
       DOWNLOAD_SPEED_LIMIT_MBS: "10"
+      # Set to "0" to Disable or enter your preferred rate limit (10 is default)
       USE_FFMPEG_TO_DOWNLOAD: "false"
       # Set to "true" if you want to use ffmpeg for downloads
 
       # If you wish to override folder locations, uncomment & edit below:
-      # RECORDINGS_FOLDER: "/root/SnappierServer/recordings"
-      # MOVIES_FOLDER: "/root/SnappierServer/movies"
-      # SERIES_FOLDER: "/root/SnappierServer/series"
-      # PVR_FOLDER: "/root/SnappierServer/pvr"
+      # RECORDINGS_FOLDER: "/root/SnappierServer/Recordings"
+      # MOVIES_FOLDER: "/root/SnappierServer/Movies"
+      # SERIES_FOLDER: "/root/SnappierServer/TVSeries"
+      # PVR_FOLDER: "/root/SnappierServer/PVR"
 
     volumes:
-      - /data/recordings/snappier-server/recordings:/root/SnappierServer/recordings
-      - /data/recordings/snappier-server/movies:/root/SnappierServer/movies
-      - /data/recordings/snappier-server/series:/root/SnappierServer/series
-      - /data/recordings/snappier-server/pvr:/root/SnappierServer/pvr
+      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
+      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
+      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
+      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
 

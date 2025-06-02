@@ -1,19 +1,19 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v0.0.0t) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+A Docker image that packages the Snappier-Server CLI (v0.8.0v) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
 1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
-2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture (v0.0.0t).
+2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture (v0.8.0v).
 
 ---
 
 ## Features
 
-* **Snappier-Server CLI v0.0.0t** for Linux (amd64 & arm64)
+* **Snappier-Server CLI v0.8.0v** for Linux (amd64 & arm64)
 * **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
 * **Timezone support** (default `America/New_York`, override via `TZ` build arg)
 * **Exposed HTTP port 8000** for API/UI
-* **Persistent volumes** for Recordings, Movies, Series, and PVR
+* **Persistent volumes** for Recordings, Movies, TVSeries, and PVR
 * **Default environment variables** for ports, remuxing, folder locations, and download rate
 
 ---
@@ -32,18 +32,18 @@ From the project root (where the Dockerfile lives), run:
 ```bash
 docker build \
   --build-arg TZ="America/New_York" \
-  --build-arg SNAPPIER_VERSION=0.0.0t \
-  -t ghcr.io/rydizz214/snappier-server-docker:0.0.0t \
+  --build-arg SNAPPIER_VERSION=0.8.0v \
+  -t ghcr.io/rydizz214/snappier-server-docker:0.8.0v \
   .
 ```
 
-* `--build-arg SNAPPIER_VERSION=0.0.0t` tells the Dockerfile to fetch v0.0.0t of the CLI.
-* `-t ghcr.io/rydizz214/snappier-server-docker:0.0.0t` tags the final image exactly as `0.0.0t`.
+* `--build-arg SNAPPIER_VERSION=0.8.0v` tells the Dockerfile to fetch v0.8.0v of the CLI.
+* `-t ghcr.io/rydizz214/snappier-server-docker:0.8.0v` tags the final image exactly as `0.8.0v`.
 
-> **Tip:** If you previously pulled or built `snappier-server-docker:0.0.0r`, you can remove it first to avoid confusion:
+> **Tip:** If you previously pulled or built `snappier-server-docker:0.8.0t`, you can remove it first to avoid confusion:
 >
 > ```bash
-> docker rmi ghcr.io/rydizz214/snappier-server-docker:0.0.0r
+> docker rmi ghcr.io/rydizz214/snappier-server-docker:0.8.0t
 > ```
 
 ---
@@ -54,7 +54,7 @@ docker build \
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  ghcr.io/rydizz214/snappier-server-docker:0.0.0t
+  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
 ```
 
 * This maps host port 7429 → container port 8000 (where Snappier-Server listens).
@@ -72,7 +72,7 @@ docker run -d \
   --name snappier-server \
   -p 7429:8000 \
   -e DOWNLOAD_SPEED_LIMIT_MBS=10 \
-  ghcr.io/rydizz214/snappier-server-docker:0.0.0t
+  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
 ```
 
 If you encounter failed downloads with `curl`, you can force **ffmpeg** to handle the download by setting:
@@ -94,11 +94,10 @@ You can override any of the following when you run the container (via `-e` flags
 | `PORT`                     | `8000`                            | Port on which Snappier-Server listens inside the container           |
 | `ENABLE_REMUX`             | `true`                            | Automatically remux `.ts` → `.mkv` when a recording finishes         |
 | `USE_FFMPEG_TO_DOWNLOAD`   | `false`                           | If `true`, use `ffmpeg` instead of `curl` for media downloads        |
-| `RECORDINGS_FOLDER`        | `/root/SnappierServer/recordings` | Container path for live TV recordings (default)                      |
-| `RECORDINGS_FOLDER`        | `/root/SnappierServer/recordings` | Container path for live TV recordings (default)                      |
-| `MOVIES_FOLDER`            | `/root/SnappierServer/movies`     | Container path for downloaded movies                                 |
-| `SERIES_FOLDER`            | `/root/SnappierServer/series`     | Container path for downloaded TV series                              |
-| `PVR_FOLDER`               | `/root/SnappierServer/pvr`        | Container path for PVR metadata and schedules                        |
+| `RECORDINGS_FOLDER`        | `/root/SnappierServer/Recordings` | Container path for live TV recordings (default)                      |
+| `MOVIES_FOLDER`            | `/root/SnappierServer/Movies`     | Container path for downloaded movies                                 |
+| `SERIES_FOLDER`            | `/root/SnappierServer/TVSeries`   | Container path for downloaded TV series                              |
+| `PVR_FOLDER`               | `/root/SnappierServer/PVR`        | Container path for PVR metadata and schedules                        |
 | `DOWNLOAD_SPEED_LIMIT_MBS` | `10` (set to `0` to disable)      | Max download speed in MB/s for `curl` (only applies if using `curl`) |
 
 #### Example with Volume Mounts
@@ -109,11 +108,11 @@ docker run -d \
   -p 7429:8000 \
   -e DOWNLOAD_SPEED_LIMIT_MBS=10 \
   -e USE_FFMPEG_TO_DOWNLOAD=false \
-  -v /host/recordings:/root/SnappierServer/recordings \
-  -v /host/movies:/root/SnappierServer/movies \
-  -v /host/series:/root/SnappierServer/series \
-  -v /host/pvr:/root/SnappierServer/pvr \
-  ghcr.io/rydizz214/snappier-server-docker:0.0.0t
+  -v /host/Recordings:/root/SnappierServer/Recordings \
+  -v /host/Movies:/root/SnappierServer/Movies \
+  -v /host/TVSeries:/root/SnappierServer/TVSeries \
+  -v /host/PVR:/root/SnappierServer/PVR \
+  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
 ```
 
 ---
@@ -127,7 +126,7 @@ version: "3.8"
 
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:0.0.0t
+    image: ghcr.io/rydizz214/snappier-server-docker:0.8.0v
     container_name: snappier-server
     restart: unless-stopped
 
@@ -138,20 +137,21 @@ services:
       PORT: "8000"
       ENABLE_REMUX: "true"
       DOWNLOAD_SPEED_LIMIT_MBS: "10"
-      USE_FFMPEG_TO_DOWNLOAD: "false"  
+      # Set to 0 to disable or change to preferred rate
+      USE_FFMPEG_TO_DOWNLOAD: "false"
       # Set to "true" if you want to use ffmpeg for downloads
-      
+
       # To override folders, uncomment below:
-      # RECORDINGS_FOLDER: "/root/SnappierServer/recordings"
-      # MOVIES_FOLDER: "/root/SnappierServer/movies"
-      # SERIES_FOLDER: "/root/SnappierServer/series"
-      # PVR_FOLDER: "/root/SnappierServer/pvr"
+      # RECORDINGS_FOLDER: "/root/SnappierServer/Recordings"
+      # MOVIES_FOLDER: "/root/SnappierServer/Movies"
+      # SERIES_FOLDER: "/root/SnappierServer/TVSeries"
+      # PVR_FOLDER: "/root/SnappierServer/PVR"
 
     volumes:
-      - /data/recordings/snappier-server/recordings:/root/SnappierServer/recordings
-      - /data/recordings/snappier-server/movies:/root/SnappierServer/movies
-      - /data/recordings/snappier-server/series:/root/SnappierServer/series
-      - /data/recordings/snappier-server/pvr:/root/SnappierServer/pvr
+      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
+      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
+      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
+      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
 
@@ -192,11 +192,11 @@ If you change the internal `PORT` environment variable, update the healthcheck U
 
 * Set `DOWNLOAD_SPEED_LIMIT_MBS=10` (or another MB/s value) when running. This only affects `curl`. To disable throttling, set `0`.
 
-**Q2: How do I force ************`ffmpeg`************ downloads?**
+**Q2: How do I force ****************`ffmpeg`**************** downloads?**
 
 * Set `USE_FFMPEG_TO_DOWNLOAD=true`. Note: `ffmpeg` does not support built-in speed limits.
 
-**Q3: Why is ************`PORT`************ set to ************`8000`************ in the Dockerfile?**
+**Q3: Why is ****************`PORT`**************** set to ****************`8000`**************** in the Dockerfile?**
 
 * Snappier-Server always listens on port 8000 internally. You map it to any host port with `-p HOST:8000` or in Compose.
 
