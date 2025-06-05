@@ -1,0 +1,49 @@
+version: "3.8"   # (You can remove this line if you want—Compose will ignore it.)
+
+services:
+  snappier-server:
+    # Build a local image named "snappier-local-test:latest" from the Dockerfile in this folder
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: snappier-local-test:latest
+
+    container_name: snappier-test
+    restart: unless-stopped
+
+    environment:
+      LOG_LEVEL:                "debug"
+      PORT:                     "8000"
+      USE_FFMPEG_TO_DOWNLOAD:   "true"
+      ENABLE_REMUX:             "true"
+      RECORDINGS_FOLDER:        "/root/SnappierServer/Recordings"
+      MOVIES_FOLDER:            "/root/SnappierServer/Movies"
+      SERIES_FOLDER:            "/root/SnappierServer/TVSeries"
+      PVR_FOLDER:               "/root/SnappierServer/PVR"
+      DOWNLOAD_SPEED_LIMIT_MBS: "0"
+
+    volumes:
+      # Map host data folders into the container. Adjust these paths if needed.
+      - "/data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings"
+      - "/data/recordings/snappier-server/Movies:/root/SnappierServer/Movies"
+      - "/data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries"
+      - "/data/recordings/snappier-server/PVR:/root/SnappierServer/PVR"
+      - "/etc/localtime:/etc/localtime:ro"
+      - "/etc/timezone:/etc/timezone:ro"
+
+    ports:
+      - "7429:8000"
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "-X"
+        - "GET"
+        - "http://127.0.0.1:8000/serverStats"
+        - "-H"
+        - "Accept: application/json"
+      interval: 60s
+      timeout: 5s
+      retries: 3

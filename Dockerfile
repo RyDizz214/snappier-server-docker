@@ -21,13 +21,13 @@ RUN apt-get update \
 FROM base AS snappier-server
 ARG TARGETARCH
 
-# download & install Snappier-Server v0.8.0v CLI
+# download & install Snappier-Server v1.0.0b CLI
 RUN case "$TARGETARCH" in \
       "amd64") PLATFORM="x64" ;; \
       "arm64") PLATFORM="arm64" ;; \
       *) echo "❌ Unsupported ARCH: $TARGETARCH" >&2 && exit 1 ;; \
     esac \
- && ASSET="snappier-server-cli-v0.8.0v-linux-${PLATFORM}.zip" \
+ && ASSET="snappier-server-cli-v1.0.0b-linux-${PLATFORM}.zip" \
  && curl -fSL "https://snappierserver.app/files/${ASSET}" -o /tmp/snappier.zip \
  && mkdir -p /opt/snappier-server \
  && unzip -q /tmp/snappier.zip -d /opt/snappier-server \
@@ -35,7 +35,7 @@ RUN case "$TARGETARCH" in \
  && chmod +x /opt/snappier-server/snappier-server \
  && ln -sf /opt/snappier-server/snappier-server /usr/local/bin/snappier-server \
  && rm /tmp/snappier.zip \
- && echo "✅ Snappier-Server v0.8.0v installed!"
+ && echo "✅ Snappier-Server v1.0.0b installed!"
 
 # data dirs & expose port
 RUN mkdir -p /root/SnappierServer/{Recordings,Movies,TVSeries,PVR}

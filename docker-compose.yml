@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:0.0.0v
+    image: ghcr.io/rydizz214/snappier-server-docker:1.0.0b
     container_name: snappier-server
     restart: unless-stopped
 

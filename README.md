@@ -1,17 +1,17 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v0.8.0v) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+A Docker image that packages the Snappier-Server CLI (v1.0.0b) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
 
 1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
-2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture (v0.8.0v).
+2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture (v1.0.0b).
 
 ---
 
 ## Features
 
-* **Snappier-Server CLI v0.8.0v** for Linux (amd64 & arm64)
+* **Snappier-Server CLI v1.0.0b** for Linux (amd64 & arm64)
 * **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
-* **Timezone support** (default `America/New_York`, override via `TZ` build arg)
+* **Timezone support** (default `America/New_York`; override via `TZ` build-arg)
 * **Exposed HTTP port 8000** for API/UI
 * **Persistent volumes** for Recordings, Movies, TVSeries, and PVR
 * **Default environment variables** for ports, remuxing, folder locations, and download rate
@@ -31,19 +31,21 @@ From the project root (where the Dockerfile lives), run:
 
 ```bash
 docker build \
+  --no-cache \
   --build-arg TZ="America/New_York" \
-  --build-arg SNAPPIER_VERSION=0.8.0v \
-  -t ghcr.io/rydizz214/snappier-server-docker:0.8.0v \
+  --build-arg SNAPPIER_VERSION=1.0.0b \
+  -t ghcr.io/rydizz214/snappier-server-docker:1.0.0b \
   .
 ```
 
-* `--build-arg SNAPPIER_VERSION=0.8.0v` tells the Dockerfile to fetch v0.8.0v of the CLI.
-* `-t ghcr.io/rydizz214/snappier-server-docker:0.8.0v` tags the final image exactly as `0.8.0v`.
+* `--build-arg SNAPPIER_VERSION=1.0.0b` tells the Dockerfile to fetch v1.0.0b of the CLI.
+* `-t ghcr.io/rydizz214/snappier-server-docker:1.0.0b` tags the final image as `1.0.0b`.
+* The `--no-cache` flag ensures a clean build (no layers are reused).
 
-> **Tip:** If you previously pulled or built `snappier-server-docker:0.8.0t`, you can remove it first to avoid confusion:
+> **Tip:** If you previously built or pulled `snappier-server-docker:0.8.0v`, you can remove it first to avoid confusion:
 >
 > ```bash
-> docker rmi ghcr.io/rydizz214/snappier-server-docker:0.8.0t
+> docker rmi ghcr.io/rydizz214/snappier-server-docker:0.8.0v
 > ```
 
 ---
@@ -54,10 +56,10 @@ docker build \
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
-  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
+  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
 ```
 
-* This maps host port 7429 → container port 8000 (where Snappier-Server listens).
+* Maps host port 7429 → container port 8000 (where Snappier-Server listens).
 * The container will use the default environment variables unless you override them (see next section).
 
 ---
@@ -67,12 +69,11 @@ docker run -d \
 By default, Snappier-Server uses `curl` to fetch media segments. We recommend throttling `curl` to **10 MB/s** to avoid potential provider throttling:
 
 ```bash
-# Example override when running:
 docker run -d \
   --name snappier-server \
   -p 7429:8000 \
   -e DOWNLOAD_SPEED_LIMIT_MBS=10 \
-  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
+  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
 ```
 
 If you encounter failed downloads with `curl`, you can force **ffmpeg** to handle the download by setting:
@@ -112,7 +113,7 @@ docker run -d \
   -v /host/Movies:/root/SnappierServer/Movies \
   -v /host/TVSeries:/root/SnappierServer/TVSeries \
   -v /host/PVR:/root/SnappierServer/PVR \
-  ghcr.io/rydizz214/snappier-server-docker:0.8.0v
+  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
 ```
 
 ---
@@ -126,7 +127,7 @@ version: "3.8"
 
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:0.8.0v
+    image: ghcr.io/rydizz214/snappier-server-docker:1.0.0b
     container_name: snappier-server
     restart: unless-stopped
 
@@ -190,13 +191,13 @@ If you change the internal `PORT` environment variable, update the healthcheck U
 
 **Q1: How do I throttle download speed?**
 
-* Set `DOWNLOAD_SPEED_LIMIT_MBS=10` (or another MB/s value) when running. This only affects `curl`. To disable throttling, set `0`.
+* Set `DOWNLOAD_SPEED_LIMIT_MBS=10` (or another MB/s value) when running. This only affects `curl`. To disable throttling, set it to `0`.
 
-**Q2: How do I force ****************`ffmpeg`**************** downloads?**
+**Q2: How do I force `ffmpeg` downloads?**
 
 * Set `USE_FFMPEG_TO_DOWNLOAD=true`. Note: `ffmpeg` does not support built-in speed limits.
 
-**Q3: Why is ****************`PORT`**************** set to ****************`8000`**************** in the Dockerfile?**
+**Q3: Why is `PORT` set to `8000` in the Dockerfile?**
 
 * Snappier-Server always listens on port 8000 internally. You map it to any host port with `-p HOST:8000` or in Compose.
 
