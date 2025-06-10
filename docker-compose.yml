@@ -15,23 +15,23 @@ services:
 
     ports:
       - "${HOST_PORT}:${PORT}"
-      - "${NOTIFY_HTTP_PORT}:${NOTIFY_HTTP_PORT}"
-      - "${NOTIFY_WS_PORT}:${NOTIFY_WS_PORT}"
+      - "${NOTIFICATION_HTTP_PORT}:${NOTIFICATION_HTTP_PORT}"
+      - "${NOTIFICATION_WS_PORT}:${NOTIFICATION_WS_PORT}"
 
     environment:
       USE_CURL_TO_DOWNLOAD:     "${USE_CURL_TO_DOWNLOAD}"
       DOWNLOAD_SPEED_LIMIT_MBS: "${DOWNLOAD_SPEED_LIMIT_MBS}"
 
       # Optional notification webhooks
-      PUSHOVER_USER_KEY:        "${PUSHOVER_USER_KEY}"
-      PUSHOVER_API_TOKEN:       "${PUSHOVER_API_TOKEN}"
-      NTFY_TOPIC:               "${NTFY_TOPIC}"
-      TELEGRAM_TOKEN:           "${TELEGRAM_TOKEN}"
-      TELEGRAM_CHAT_ID:         "${TELEGRAM_CHAT_ID}"
-      DISCORD_WEBHOOK_URL:      "${DISCORD_WEBHOOK_URL}"
+      #PUSHOVER_USER:            "${PUSHOVER_USER}"
+      #PUSHOVER_API:             "${PUSHOVER_API}"
+      #NTFY_TOPIC:               "${NTFY_TOPIC}"
+      #TELEGRAM_TOKEN:           "${TELEGRAM_TOKEN}"
+      #TELEGRAM_CHAT_ID:         "${TELEGRAM_CHAT_ID}"
+      #DISCORD_WEBHOOK_URL:      "${DISCORD_WEBHOOK_URL}"
 
     # Optional: bind host directories for media (uncomment to utilize)
-    #volumes:
+    # volumes:
     #  - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
     #  - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
     #  - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries

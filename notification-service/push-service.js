@@ -11,9 +11,9 @@ expressApp.use(express.json());
 
 // Pushover configuration
 const pushoverConfig = {
-    token: process.env.PUSHOVER_TOKEN || '',
+    token: process.env.PUSHOVER_API || '',
     user: process.env.PUSHOVER_USER || '',
-    enabled: !!(process.env.PUSHOVER_TOKEN && process.env.PUSHOVER_USER)
+    enabled: !!(process.env.PUSHOVER_API && process.env.PUSHOVER_USER)
 };
 
 console.log('📱 Pushover Push Notification Service');
@@ -21,7 +21,7 @@ console.log(`   Status: ${pushoverConfig.enabled ? '✅ Enabled and Ready' : '�
 
 if (!pushoverConfig.enabled) {
     console.log('⚠️  To enable Pushover notifications, set these environment variables:');
-    console.log('   PUSHOVER_TOKEN=your_application_token');
+    console.log('   PUSHOVER_API=your_application_token');
     console.log('   PUSHOVER_USER=your_user_key');
 }
 
@@ -30,7 +30,7 @@ async function sendPushoverNotification(title, body, options = {}) {
     if (!pushoverConfig.enabled) {
         return { 
             success: false, 
-            error: 'Pushover not configured. Set PUSHOVER_TOKEN and PUSHOVER_USER environment variables.' 
+            error: 'Pushover not configured. Set PUSHOVER_API and PUSHOVER_USER environment variables.' 
         };
     }
     

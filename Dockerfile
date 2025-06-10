@@ -4,10 +4,11 @@
 FROM ubuntu:25.04 AS base
 ARG TARGETARCH
 ARG SNAPPIER_SERVER_VERSION=1.0.0
-ENV SNAPPIER_SERVER_VERSION="${SNAPPIER_SERVER_VERSION}"
 ARG TZ="America/New_York"
-ENV TZ="${TZ}"
-ENV DEBIAN_FRONTEND=noninteractive
+
+ENV SNAPPIER_SERVER_VERSION="${SNAPPIER_SERVER_VERSION}" \
+    TZ="${TZ}" \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -22,15 +23,13 @@ RUN apt-get update \
  && echo $TZ > /etc/timezone \
  && rm -rf /var/lib/apt/lists/*
 
-########################################
-# 1.5) Install Node.js
-########################################
+# Install Node.js LTS
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 ########################################
-# 2) Snappier-Server: download & install
+# 2) Snappier-Server builder
 ########################################
 FROM base AS snappier-server
 ARG TARGETARCH
@@ -45,42 +44,63 @@ RUN set -eux; \
       arm64) PLATFORM="arm64";; \
       *) echo "❌ Unsupported architecture: $TARGETARCH" >&2; exit 1;; \
     esac; \
-    echo "🔖 Installing Snappier-Server v${SNAPPIER_SERVER_VERSION} for ${PLATFORM}…"; \
     ASSET_FILENAME="snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-linux-${PLATFORM}.zip"; \
     ASSET_URL="https://${REPO}/${ASSET_FILENAME}"; \
-    echo "📥 Downloading from: $ASSET_URL"; \
-    TMP_DIR=$(mktemp -d); \
-    curl -fSL "$ASSET_URL" -o "$TMP_DIR/snappier.zip"; \
-    echo "📦 Unzipping archive…"; \
-    unzip -q "$TMP_DIR/snappier.zip" -d "$TMP_DIR/extracted"; \
+    curl -fSL "$ASSET_URL" -o /tmp/snappier.zip; \
+    unzip -q /tmp/snappier.zip -d /tmp/extracted; \
     mkdir -p "$INSTALL_DIR"; \
-    mv "$TMP_DIR/extracted/"* "$INSTALL_DIR/$BIN_NAME"; \
+    mv /tmp/extracted/* "$INSTALL_DIR/$BIN_NAME"; \
     chmod +x "$INSTALL_DIR/$BIN_NAME"; \
     ln -sf "$INSTALL_DIR/$BIN_NAME" /usr/local/bin/$BIN_NAME; \
-    rm -rf "$TMP_DIR"; \
-    echo "✅ Snappier-Server v${SNAPPIER_SERVER_VERSION} installed!"
+    rm -rf /tmp/snappier.zip /tmp/extracted
 
 ########################################
-# 3) Notification Service
+# 3) Notification Service builder
 ########################################
 FROM snappier-server AS notifier
 ENV NODE_ENV=production
-RUN mkdir -p /opt/notification-service
 WORKDIR /opt/notification-service
+
 COPY notification-service/package.json notification-service/push-service.js ./
 RUN npm install --only=production
 
 ########################################
-# 4) Final stage: runtime image
+# 4) Final runtime image
 ########################################
 FROM snappier-server AS final
-COPY --from=snappier-server /opt/snappier-server /opt/snappier-server
-COPY --from=notifier /opt/notification-service /opt/notification-service
 
+# Copy server binary and notifier service
+COPY --from=snappier-server /opt/snappier-server /opt/snappier-server
+COPY --from=notifier    /opt/notification-service /opt/notification-service
+
+# Prepare app directory
 WORKDIR /root/SnappierServer
 RUN mkdir -p Recordings Movies TVSeries PVR
 
-# Default env vars (override via env_file)
+# Copy headless entrypoint
+COPY headless-entrypoint.sh /usr/local/bin/headless-entrypoint.sh
+RUN chmod +x /usr/local/bin/headless-entrypoint.sh
+
+# Restore notifier client scripts
+COPY notification_client.py           /root/SnappierServer/
+# COPY notification-client.js         /root/SnappierServer/  # if you use the JS client
+
+# Copy and wire up enhanced-node-notifier & webhook
+COPY enhanced-node-notifier.js        /tmp/enhanced-node-notifier.js
+COPY snappier-webhook.js              /tmp/snappier-webhook.js
+
+RUN mkdir -p node_modules/node-notifier \
+ && cp /tmp/enhanced-node-notifier.js node_modules/node-notifier/index.js \
+ && printf '{"name":"node-notifier","version":"10.0.1","main":"index.js"}' > node_modules/node-notifier/package.json \
+ \
+ && mkdir -p /usr/local/lib/node_modules/node-notifier \
+ && cp /tmp/enhanced-node-notifier.js /usr/local/lib/node_modules/node-notifier/index.js \
+ && printf '{"name":"node-notifier","version":"10.0.1","main":"index.js"}' > /usr/local/lib/node_modules/node-notifier/package.json \
+ \
+ && mv /tmp/snappier-webhook.js /root/SnappierServer/snappier-webhook.js \
+ && rm /tmp/enhanced-node-notifier.js
+
+# **Correct** ENV block from your revised Dockerfile
 ENV PORT=8000 \
     ENABLE_REMUX=true \
     USE_CURL_TO_DOWNLOAD=false \
@@ -91,18 +111,13 @@ ENV PORT=8000 \
     DOWNLOAD_SPEED_LIMIT_MBS=0 \
     NOTIFICATION_HTTP_PORT=9080 \
     NOTIFICATION_WS_PORT=9081 \
-    PUSHOVER_USER_KEY="" \
-    PUSHOVER_API_TOKEN="" \
+    PUSHOVER_USER="" \
+    PUSHOVER_API="" \
     NTFY_TOPIC="" \
     TELEGRAM_TOKEN="" \
     TELEGRAM_CHAT_ID="" \
     DISCORD_WEBHOOK_URL=""
 
-# Entrypoint & server start
-COPY headless-entrypoint.sh /usr/local/bin/headless-entrypoint.sh
-RUN chmod +x /usr/local/bin/headless-entrypoint.sh
-
 EXPOSE 8000 9080 9081
 
 ENTRYPOINT ["/usr/local/bin/headless-entrypoint.sh"]
-CMD ["/opt/snappier-server"]

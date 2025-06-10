@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # headless-entrypoint.sh
 
-set -euxo pipefail
+set -euo pipefail
 
 # Cleanup function for graceful shutdown
 cleanup() {
@@ -39,6 +39,7 @@ curl -s -X POST "http://localhost:${NOTIFICATION_HTTP_PORT}/notify" \
     "body": "Server starting with push notification support",
     "options": {"urgency": "low", "tags": "startup"}
   }' || echo "⚠️ Could not send startup notification"
+  echo ""
 
 # Start the webhook & Snappier server
 echo "🔗 Starting webhook integration and Snappier server..."
@@ -46,10 +47,10 @@ cd /root/SnappierServer
 node snappier-webhook.js &
 SNAPPIER_PID=$!
 
-echo "✅ All services started!"
 echo "📊 Snappier Server: http://localhost:${PORT}"
 echo "📱 Notification API: http://localhost:${NOTIFICATION_HTTP_PORT}"
 echo "📡 Notification WS: ws://localhost:${NOTIFICATION_WS_PORT}"
+echo "✅ All services started!"
 
 # Notify ready
 sleep 2
@@ -60,6 +61,6 @@ curl -s -X POST "http://localhost:${NOTIFICATION_HTTP_PORT}/notify" \
     "body": "All services are running",
     "options": {"urgency": "normal", "tags": "ready"}
   }' || echo "⚠️ Could not send ready notification"
-
-echo "🎯 Services running. Press Ctrl+C to stop."
+echo ""
+echo "🎯 All services running. Press Ctrl+C to stop."
 wait
