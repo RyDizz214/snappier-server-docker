@@ -1,42 +1,44 @@
-version: "3.8"
-
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:1.0.0b
+    image: ghcr.io/rydizz214/snappier-server-docker:${SNAPPIER_SERVER_VERSION}
     container_name: snappier-server
     restart: unless-stopped
 
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SNAPPIER_SERVER_VERSION: "${SNAPPIER_SERVER_VERSION}"
+
+    env_file:
+      - .env
+
     ports:
-      - "7429:8000"
+      - "${HOST_PORT}:${PORT}"
+      - "${NOTIFY_HTTP_PORT}:${NOTIFY_HTTP_PORT}"
+      - "${NOTIFY_WS_PORT}:${NOTIFY_WS_PORT}"
 
     environment:
-      PORT: "8000"
-      ENABLE_REMUX: "true"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
-      # Set to "0" to Disable or enter your preferred rate limit (10 is default)
-      USE_FFMPEG_TO_DOWNLOAD: "false"
-      # Set to "true" if you want to use ffmpeg for downloads
+      USE_CURL_TO_DOWNLOAD:     "${USE_CURL_TO_DOWNLOAD}"
+      DOWNLOAD_SPEED_LIMIT_MBS: "${DOWNLOAD_SPEED_LIMIT_MBS}"
 
-      # If you wish to override folder locations, uncomment & edit below:
-      # RECORDINGS_FOLDER: "/root/SnappierServer/Recordings"
-      # MOVIES_FOLDER: "/root/SnappierServer/Movies"
-      # SERIES_FOLDER: "/root/SnappierServer/TVSeries"
-      # PVR_FOLDER: "/root/SnappierServer/PVR"
+      # Optional notification webhooks
+      PUSHOVER_USER_KEY:        "${PUSHOVER_USER_KEY}"
+      PUSHOVER_API_TOKEN:       "${PUSHOVER_API_TOKEN}"
+      NTFY_TOPIC:               "${NTFY_TOPIC}"
+      TELEGRAM_TOKEN:           "${TELEGRAM_TOKEN}"
+      TELEGRAM_CHAT_ID:         "${TELEGRAM_CHAT_ID}"
+      DISCORD_WEBHOOK_URL:      "${DISCORD_WEBHOOK_URL}"
 
-    volumes:
-      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
-      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
-      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
-      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
+    # Optional: bind host directories for media (uncomment to utilize)
+    #volumes:
+    #  - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
+    #  - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
+    #  - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
+    #  - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
 
     healthcheck:
-      test:
-        - "CMD"
-        - "curl"
-        - "-f"
-        - "http://127.0.0.1:8000/serverStats"
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:${PORT}/serverStats"]
       interval: 60s
       timeout: 5s
       retries: 3
