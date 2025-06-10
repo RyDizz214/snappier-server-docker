@@ -1,208 +1,110 @@
 # Snappier-Server Docker
 
-A Docker image that packages the Snappier-Server CLI (v1.0.0b) on Ubuntu 25.04 with FFmpeg installed. This multi-stage Dockerfile:
+**Snappier-Server** is a self-hosted, lightweight recording and streaming service packaged in Docker with integrated push notification support.
 
-1. **Base stage**: installs runtime dependencies, FFmpeg (7.1.1), and configures timezone.
-2. **Snappier-Server stage**: downloads and installs the Snappier-Server CLI binary for your architecture (v1.0.0b).
+## Table of Contents
 
----
+* [Features](#features)
+* [Prerequisites](#prerequisites)
+* [Directory Structure](#directory-structure)
+* [Configuration](#configuration)
+* [Building the Docker Image](#building-the-docker-image)
+* [Running with Docker Compose](#running-with-docker-compose)
+* [Environment Variables](#environment-variables)
+* [Version Bump and Tagging](#version-bump-and-tagging)
+* [Healthcheck](#healthcheck)
+* [Contributing](#contributing)
+* [License](#license)
 
 ## Features
 
-* **Snappier-Server CLI v1.0.0b** for Linux (amd64 & arm64)
-* **FFmpeg 7.1.1** installed via `apt` for encoding/decoding support
-* **Timezone support** (default `America/New_York`; override via `TZ` build-arg)
-* **Exposed HTTP port 8000** for API/UI
-* **Persistent volumes** for Recordings, Movies, TVSeries, and PVR
-* **Default environment variables** for ports, remuxing, folder locations, and download rate
-
----
+* Multi-arch support (amd64, arm64)
+* FFmpeg-based recording and streaming
+* Push notification service (Pushover, ntfy.sh, Telegram, Discord)
+* Integrated webhook monitor and log forwarder
+* Health check endpoint at `/serverStats`
+* Easy environment-based configuration via `.env`
 
 ## Prerequisites
 
-* Docker Engine ≥ 20.10
-* (Optional) Build argument `TARGETARCH` if you need to cross-build
+* Docker 20.10+ and Docker Compose 1.29+
+* Git (for source and tags)
+* A GitHub account with Container Registry access (ghcr.io)
 
----
-
-## Building the Image
-
-From the project root (where the Dockerfile lives), run:
+## Directory Structure
 
 ```bash
-docker build \
-  --no-cache \
-  --build-arg TZ="America/New_York" \
-  --build-arg SNAPPIER_VERSION=1.0.0b \
-  -t ghcr.io/rydizz214/snappier-server-docker:1.0.0b \
-  .
+snappier-server-docker/
+├── Dockerfile
+├── docker-compose.yml
+├── example.env            # Copy to .env and fill in
+├── .gitignore
+├── README.md
+├── headless-entrypoint.sh
+├── notification-service/  # Node notifier in its own layer
+│   ├── package.json
+│   └── push-service.js
+├── enhanced-node-notifier.js
+├── snappier-webhook.js
+└── notification_client.py
 ```
 
-* `--build-arg SNAPPIER_VERSION=1.0.0b` tells the Dockerfile to fetch v1.0.0b of the CLI.
-* `-t ghcr.io/rydizz214/snappier-server-docker:1.0.0b` tags the final image as `1.0.0b`.
-* The `--no-cache` flag ensures a clean build (no layers are reused).
+## Configuration
 
-> **Tip:** If you previously built or pulled `snappier-server-docker:0.8.0v`, you can remove it first to avoid confusion:
->
-> ```bash
-> docker rmi ghcr.io/rydizz214/snappier-server-docker:0.8.0v
-> ```
+1. Copy `example.env` to `.env`:
 
----
-
-## Running the Container
+   ```bash
+   cp example.env .env
+   ```
+2. Edit `.env` and set your values.
 
 ```bash
-docker run -d \
-  --name snappier-server \
-  -p 7429:8000 \
-  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
+remov
 ```
 
-* Maps host port 7429 → container port 8000 (where Snappier-Server listens).
-* The container will use the default environment variables unless you override them (see next section).
-
----
-
-## Download Options
-
-By default, Snappier-Server uses `curl` to fetch media segments. We recommend throttling `curl` to **10 MB/s** to avoid potential provider throttling:
+## Running with Docker Compose
 
 ```bash
-docker run -d \
-  --name snappier-server \
-  -p 7429:8000 \
-  -e DOWNLOAD_SPEED_LIMIT_MBS=10 \
-  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
+docker compose up -d --build
 ```
-
-If you encounter failed downloads with `curl`, you can force **ffmpeg** to handle the download by setting:
-
-```bash
--e USE_FFMPEG_TO_DOWNLOAD=true
-```
-
-> **Note:** `ffmpeg` does not support built-in speed throttling—use with caution if your provider enforces per-stream limits.
-
----
 
 ## Environment Variables
 
-You can override any of the following when you run the container (via `-e` flags):
+| Variable                   | Default | Description                              |
+| -------------------------- | ------- | ---------------------------------------- |
+| `SNAPPIER_SERVER_VERSION`  | `1.0.0` | Version to download and run              |
+| `PORT`                     | `8000`  | Service listen port                      |
+| `HOST_PORT`                | `7429`  | Host port mapped to `PORT`               |
+| `NOTIFY_HTTP_PORT`         | `9080`  | HTTP port for notification service       |
+| `NOTIFY_WS_PORT`           | `9081`  | WebSocket port for notification service  |
+| `USE_CURL_TO_DOWNLOAD`     | `false` | Use curl instead of FFmpeg for downloads |
+| `DOWNLOAD_SPEED_LIMIT_MBS` | `0`     | Download rate limit (0 = no limit)       |
+| `PUSHOVER_USER_KEY`        | \*      | Pushover user key (optional)             |
+| `PUSHOVER_API_TOKEN`       | \*      | Pushover API token (optional)            |
+| `NTFY_TOPIC`               | \*      | ntfy.sh topic (optional)                 |
+| `TELEGRAM_TOKEN`           | \*      | Telegram bot token (optional)            |
+| `TELEGRAM_CHAT_ID`         | \*      | Telegram chat ID (optional)              |
+| `DISCORD_WEBHOOK_URL`      | \*      | Discord webhook URL (optional)           |
 
-| Variable                   | Default                           | Description                                                          |
-| -------------------------- | --------------------------------- | -------------------------------------------------------------------- |
-| `PORT`                     | `8000`                            | Port on which Snappier-Server listens inside the container           |
-| `ENABLE_REMUX`             | `true`                            | Automatically remux `.ts` → `.mkv` when a recording finishes         |
-| `USE_FFMPEG_TO_DOWNLOAD`   | `false`                           | If `true`, use `ffmpeg` instead of `curl` for media downloads        |
-| `RECORDINGS_FOLDER`        | `/root/SnappierServer/Recordings` | Container path for live TV recordings (default)                      |
-| `MOVIES_FOLDER`            | `/root/SnappierServer/Movies`     | Container path for downloaded movies                                 |
-| `SERIES_FOLDER`            | `/root/SnappierServer/TVSeries`   | Container path for downloaded TV series                              |
-| `PVR_FOLDER`               | `/root/SnappierServer/PVR`        | Container path for PVR metadata and schedules                        |
-| `DOWNLOAD_SPEED_LIMIT_MBS` | `10` (set to `0` to disable)      | Max download speed in MB/s for `curl` (only applies if using `curl`) |
-
-#### Example with Volume Mounts
-
-```bash
-docker run -d \
-  --name snappier-server \
-  -p 7429:8000 \
-  -e DOWNLOAD_SPEED_LIMIT_MBS=10 \
-  -e USE_FFMPEG_TO_DOWNLOAD=false \
-  -v /host/Recordings:/root/SnappierServer/Recordings \
-  -v /host/Movies:/root/SnappierServer/Movies \
-  -v /host/TVSeries:/root/SnappierServer/TVSeries \
-  -v /host/PVR:/root/SnappierServer/PVR \
-  ghcr.io/rydizz214/snappier-server-docker:1.0.0b
-```
-
----
-
-## Using Docker Compose
-
-Below is a sample `docker-compose.yml` that uses the new image tag:
-
-```yaml
-version: "3.8"
-
-services:
-  snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:1.0.0b
-    container_name: snappier-server
-    restart: unless-stopped
-
-    ports:
-      - "7429:8000"
-
-    environment:
-      PORT: "8000"
-      ENABLE_REMUX: "true"
-      DOWNLOAD_SPEED_LIMIT_MBS: "10"
-      # Set to 0 to disable or change to preferred rate
-      USE_FFMPEG_TO_DOWNLOAD: "false"
-      # Set to "true" if you want to use ffmpeg for downloads
-
-      # To override folders, uncomment below:
-      # RECORDINGS_FOLDER: "/root/SnappierServer/Recordings"
-      # MOVIES_FOLDER: "/root/SnappierServer/Movies"
-      # SERIES_FOLDER: "/root/SnappierServer/TVSeries"
-      # PVR_FOLDER: "/root/SnappierServer/PVR"
-
-    volumes:
-      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
-      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
-      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
-      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-
-    healthcheck:
-      test:
-        - "CMD"
-        - "curl"
-        - "-f"
-        - "http://127.0.0.1:8000/serverStats"
-      interval: 60s
-      timeout: 5s
-      retries: 3
-```
-
-Run with:
-
-```bash
-docker-compose up -d
-```
-
----
+> **Note:** `*` = empty by default; fill these in `.env`.
 
 ## Healthcheck
 
-The built-in healthcheck queries:
+The container exposes a health endpoint:
 
 ```
-http://127.0.0.1:8000/serverStats
+http://localhost:${PORT}/serverStats
 ```
 
-If you change the internal `PORT` environment variable, update the healthcheck URL accordingly.
+Use this for liveness/readiness probes.
 
----
+## Contributing
 
-## Frequently Asked Questions
-
-**Q1: How do I throttle download speed?**
-
-* Set `DOWNLOAD_SPEED_LIMIT_MBS=10` (or another MB/s value) when running. This only affects `curl`. To disable throttling, set it to `0`.
-
-**Q2: How do I force `ffmpeg` downloads?**
-
-* Set `USE_FFMPEG_TO_DOWNLOAD=true`. Note: `ffmpeg` does not support built-in speed limits.
-
-**Q3: Why is `PORT` set to `8000` in the Dockerfile?**
-
-* Snappier-Server always listens on port 8000 internally. You map it to any host port with `-p HOST:8000` or in Compose.
-
----
+1. Fork the repo
+2. Create a feature branch
+3. Implement and test
+4. Submit a pull request
 
 ## License
 
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License.
