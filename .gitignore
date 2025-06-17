@@ -1,2 +1,7 @@
 test/
 .env
+logs/
+epg/
+schedules.json
+build.log
+__pycache__/
