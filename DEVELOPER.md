@@ -35,7 +35,7 @@ See [snappierserver.app](https://snappierserver.app) for complete Snappier Serve
 docker build -t ghcr.io/rydizz214/snappier-server-docker:1.3.4a .
 ```
 
-### Publishing to GHCR
+### Publishing to GHCR (Maintainers Only)
 ```bash
 # Authenticate once (requires GitHub PAT with package:write scope)
 echo "${GHCR_TOKEN}" | docker login ghcr.io -u rydizz214 --password-stdin
@@ -47,6 +47,8 @@ docker push ghcr.io/rydizz214/snappier-server-docker:1.3.4a
 docker tag ghcr.io/rydizz214/snappier-server-docker:1.3.4a ghcr.io/rydizz214/snappier-server-docker:latest
 docker push ghcr.io/rydizz214/snappier-server-docker:latest
 ```
+
+**Note**: Only maintainers with GHCR push credentials need to run these commands.
 
 ### Local Testing with Docker Compose
 ```bash

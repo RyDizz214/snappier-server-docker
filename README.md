@@ -161,23 +161,6 @@ docker build \
 
 ---
 
-## Publishing to GHCR
-
-```bash
-# Authenticate (one-time setup)
-echo "${GHCR_TOKEN}" | docker login ghcr.io -u rydizz214 --password-stdin
-
-# Push image
-docker push ghcr.io/rydizz214/snappier-server-docker:1.3.4a
-
-# Also tag as latest
-docker tag ghcr.io/rydizz214/snappier-server-docker:1.3.4a \
-           ghcr.io/rydizz214/snappier-server-docker:latest
-docker push ghcr.io/rydizz214/snappier-server-docker:latest
-```
-
----
-
 ## Troubleshooting
 
 ### Notifications Not Sending
