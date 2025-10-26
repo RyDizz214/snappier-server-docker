@@ -2,7 +2,7 @@
 
 [![Docker Image](https://ghcr.io/rydizz214/snappier-server-docker/badge)](https://ghcr.io/rydizz214/snappier-server-docker)
 
-A production-ready Docker image bundling **Snappier Server CLI** (by Sarah Bainbridge) with a **hardened FFmpeg toolchain** and **enhanced notification pipeline** that intelligently enriches recording events with EPG metadata and forwards structured alerts to Pushover.
+A production-ready Docker image bundling **Snappier Server CLI** with a **hardened FFmpeg toolchain** and **enhanced notification pipeline** that intelligently enriches recording events with EPG metadata and forwards structured alerts to Pushover.
 
 **Current Version**: `1.3.4a` | **FFmpeg**: Latest | **Architecture**: x64 Linux
 
@@ -233,8 +233,8 @@ All notifications follow a consistent format with structured JSON payloads:
 ## Support & Issue Reporting
 
 ### Issues with Snappier Server Itself
-For problems with recording, EPG, PVR, or the Snappier Server CLI (by Sarah Bainbridge):
-- **Join**: [Snappier Discord Channel](https://discord.gg/snappier)
+For problems with recording, EPG, PVR, or the Snappier Server CLI:
+- **Join**: [Snappier Discord Channel](https://discord.gg/KSdU5VrHgM)
 - Include Snappier Server version, logs, and detailed reproduction steps
 - **Note**: Visit [snappierserver.app](https://snappierserver.app) for complete Snappier Server documentation
 
@@ -277,7 +277,7 @@ snappier-server-docker/
 
 ## Acknowledgments
 
-- **Snappier Server** by Sarah Bainbridge – Core recording, PVR, and EPG functionality
+- **Snappier Server** – Core recording, PVR, and EPG functionality
 - **FFmpeg** community – Video encoding/transcoding
 - **Pushover** – Notification delivery service
 - Contributors to this Docker wrapper and notification pipeline
@@ -292,5 +292,5 @@ MIT License – See [LICENSE](LICENSE) for details.
 
 **Happy recording! 🎬**
 
-For questions about Snappier Server features, join the [Snappier Discord](https://discord.gg/snappier). For Docker or notification issues, open a [GitHub Issue](https://github.com/rydizz214/snappier-server-docker/issues).
+For questions about Snappier Server features, join the [Snappier Discord](https://discord.gg/KSdU5VrHgM). For Docker or notification issues, open a [GitHub Issue](https://github.com/rydizz214/snappier-server-docker/issues).
 

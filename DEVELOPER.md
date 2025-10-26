@@ -5,7 +5,7 @@ This file provides guidance for developers and contributors working on this repo
 ## Project Overview
 
 This repository builds `ghcr.io/rydizz214/snappier-server-docker`, a Docker image that bundles:
-- **Snappier Server CLI** (v1.3.4a) - IPTV recording server by Sarah Bainbridge
+- **Snappier Server CLI** (v1.3.4a) - IPTV recording server
 - **FFmpeg toolchain** - statically linked with x264/x265, libvpx, fdk-aac, opus, etc.
 - **Enhanced notification pipeline** - Python webhook that intelligently enriches events with EPG metadata and forwards to Pushover
 
@@ -346,7 +346,7 @@ For issues specific to this Docker image, notification system, or webhook enrich
 
 ## Acknowledgments
 
-- **Snappier Server** by Sarah Bainbridge - Core recording and PVR functionality
+- **Snappier Server** - Core recording and PVR functionality
 - **FFmpeg** community - Video encoding/transcoding
 - **Pushover** - Notification delivery service
 - Contributors to this Docker wrapper and notification pipeline
