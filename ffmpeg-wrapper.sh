@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Snappier Server v1.3.4a FFmpeg wrapper
+# HTTP→HTTPS upgrade + network resilience for stream interruptions
+
 # -------- Config (env tunables) --------
 ALLOW_HTTP="${ALLOW_HTTP:-0}"
 ALLOW_HTTP_HOSTS="${ALLOW_HTTP_HOSTS:-localhost,127.0.0.1,snappier-server}"
