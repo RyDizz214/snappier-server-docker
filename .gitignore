@@ -5,3 +5,12 @@ epg/
 schedules.json
 build.log
 __pycache__/
+*.PNG
+*.png
+*.jpg
+*.jpeg
+test_*.py
+*_REPORT*.md
+*_FIX*.md
+*_SUMMARY*.md
+*_RESULTS*.md
