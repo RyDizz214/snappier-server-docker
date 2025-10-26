@@ -1,101 +1,313 @@
 # Snappier Server Docker Image
 
-This repository contains the build context for `ghcr.io/rydizz214/snappier-server-docker`, a self‑contained Docker image that bundles the Snappier Server CLI, a hardened FFmpeg toolchain, and the notification helpers that enrich and forward events to Pushover.
+[![Docker Image](https://ghcr.io/rydizz214/snappier-server-docker/badge)](https://ghcr.io/rydizz214/snappier-server-docker)
 
-## Key Features
+A production-ready Docker image bundling **Snappier Server CLI** (by Sarah Bainbridge) with a **hardened FFmpeg toolchain** and **enhanced notification pipeline** that intelligently enriches recording events with EPG metadata and forwards structured alerts to Pushover.
 
-- **Prebuilt FFmpeg toolchain** – statically linked with x264/x265, libvpx, fdk-aac, opus, freetype, and other common codecs.
-- **Enhanced notification pipeline** – Python webhook and Node shim parse Snappier log output, enrich the payload with EPG metadata, and send structured JSON to Pushover.
-- **Clean metadata for alerts** – channel names have the IPTV provider prefix stripped, job IDs are shortened for readability, and cancellation events are recovered even if only a tail log is available.
-- **Human-friendly schedule timestamps** – scheduled recordings include an auto-localised start time that honours the container’s `TZ` variable.
-- **Drop-in entrypoint** – the container uses `/usr/local/bin/entrypoint.sh` to launch the notifier stack, background helpers, and `snappier-server-cli`.
+**Current Version**: `1.3.4a` | **FFmpeg**: Latest | **Architecture**: x64 Linux
 
-## Repository Layout
+---
 
-```
-├── Dockerfile
-├── docker-compose.yml        # Reference compose file with sane defaults
-├── entrypoint.sh             # Boot sequence for notify + Snappier CLI
-├── notify/                   # Enhanced webhook + node-notifier shim
-├── scripts/                  # Log monitor, health watcher, etc.
-├── ffmpeg-wrapper.sh         # Wrapper that points ffmpeg -> ffmpeg.real
-├── .gitignore
-└── CHANGELOG.md              # Release notes
-```
+## ✨ Key Features
 
-## Requirements
+### Core Recording & Streaming
+- **Snappier Server CLI** – IPTV recording, scheduled downloads, catch-up support
+- **Real-time EPG (Electronic Program Guide)** – Browse and search current/upcoming programs
+- **PVR (Personal Video Recorder)** – Automatic recording rules, series tracking, episode exclusions
+- **Statically-linked FFmpeg** – x264, x265, libvpx, fdk-aac, opus, freetype, fontconfig
+- **HTTP→HTTPS upgrade** – Automatic protocol upgrade for insecure sources (configurable)
+- **Network resilience** – Automatic reconnection with exponential backoff for stream interruptions
+- **Catch-up buffer extension** – Configurable 3-minute extension on catch-up downloads to prevent truncation
 
-- Docker 24+
-- Optional: Docker Compose v2 if you want to use `docker-compose.yml`
-- Pushover user/app tokens (set via environment variables)
+### Notifications & Monitoring
+- **Intelligent webhook system** – Parses Snappier logs, enriches with EPG metadata, sends to Pushover
+- **Structured logging** – Log levels (DEBUG, INFO, WARNING, ERROR) with ISO 8601 timestamps
+- **Pushover retry logic** – Exponential backoff (2s → 4s → 8s) ensures no lost notifications
+- **Health monitoring** – Background health checker with configurable alert thresholds
+- **Request timeouts** – 5-second timeouts on file operations prevent handler hangs
 
-## Building Locally
+### User Experience
+- **Clean channel names** – Strips IPTV provider prefixes (US, CA, UK, etc.) and region suffixes
+- **Shortened job IDs** – Full UUID preserved, but display uses first 8 characters
+- **Human-friendly timestamps** – Auto-localized to container's `TZ` variable
+- **EPG enrichment** – Programs matched by title/timestamp with scoring algorithm
+- **TMDB integration** – Optional movie/series metadata enrichment with ratings
 
+---
+
+## Quick Start
+
+### Prerequisites
+- **Docker** 24.0+
+- **Docker Compose** 2.0+ (optional, but recommended)
+- **Pushover credentials** (user key + app token)
+
+### 1. Clone Repository
 ```bash
 git clone https://github.com/rydizz214/snappier-server-docker.git
 cd snappier-server-docker
-docker build -t ghcr.io/rydizz214/snappier-server-docker:1.2.8 .
 ```
 
-The build script downloads the Snappier Server CLI artifact (`v1.2.8`, x64 linux) and the latest FFmpeg source, compiles the encoder stack, and copies in the notification helpers.
+### 2. Configure Environment
+```bash
+# Copy example configuration
+cp example.env .env
+
+# Edit with your credentials
+nano .env
+```
+
+**Required variables**:
+```bash
+PUSHOVER_USER_KEY=<your-user-key>
+PUSHOVER_APP_TOKEN=<your-app-token>
+```
+
+### 3. Start Container
+```bash
+# Using Docker Compose (recommended)
+docker compose up -d
+
+# Or with Docker directly
+docker run -d \
+  --name snappier-server \
+  -p 7429:8000 \
+  -p 9080:9080 \
+  -e PUSHOVER_USER_KEY="your-key" \
+  -e PUSHOVER_APP_TOKEN="your-token" \
+  -e TZ="America/New_York" \
+  -v snappier-data:/root/SnappierServer \
+  ghcr.io/rydizz214/snappier-server-docker:1.3.4a
+```
+
+### 4. Verify Health
+```bash
+# Check webhook is running
+curl http://localhost:9080/health | jq .
+
+# View logs
+docker compose logs -f snappier-server
+```
+
+---
+
+## Configuration Reference
+
+### Core Settings
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TZ` | `America/New_York` | Container timezone (affects timestamps in logs and notifications) |
+| `PORT` | `8000` | Snappier Server listen port (inside container) |
+| `HOST_PORT` | `7429` | Host port mapping for Snappier Server |
+
+### Notification Settings
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUSHOVER_USER_KEY` | _(required)_ | Your Pushover user key (32-char alphanumeric) |
+| `PUSHOVER_APP_TOKEN` | _(required)_ | Your Pushover app token (32-char alphanumeric) |
+| `NOTIFICATION_HTTP_PORT` | `9080` | Webhook port (not exposed externally by default) |
+| `NOTIFY_TITLE_PREFIX` | `🎬 Snappier` | Prefix for all notification titles |
+| `NOTIFY_DESC_LIMIT` | `900` | Max description length in characters |
+
+### Reliability & Retry Logic
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_RETRY_ATTEMPTS` | `3` | Number of Pushover API retry attempts |
+| `NOTIFY_RETRY_DELAY` | `2` | Initial retry delay in seconds (exponential backoff) |
+| `WEBHOOK_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `HTTPS_PROBE_TIMEOUT` | `3` | Timeout for HTTPS capability probe (seconds) |
+
+### HTTP/HTTPS Upgrade
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALLOW_HTTP` | `0` | Allow insecure HTTP streams (1=yes, 0=no) |
+| `ALLOW_HTTP_HOSTS` | `localhost,127.0.0.1,snappier-server` | Comma-separated hosts allowed to use HTTP |
+
+### Catch-up Downloads
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CATCHUP_EXTENSION_ENABLED` | `1` | Enable duration extension (1=yes, 0=no) |
+| `CATCHUP_BUFFER_SECONDS` | `180` | Buffer duration in seconds (default 3 minutes) |
+| `CATCHUP_AUDIO_BITRATE` | `384k` | Audio bitrate for transcoding (e.g., 192k, 256k, 384k) |
+
+### EPG & API
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SNAPPY_API_ENABLED` | `1` | Enable Snappier API for EPG enrichment |
+| `SNAPPY_API_BASE` | `http://127.0.0.1:8000` | Snappier Server REST endpoint |
+| `SNAPPY_API_TIMEOUT` | `5` | API request timeout (seconds) |
+| `EPG_CACHE` | `/root/SnappierServer/epg/epg_cache.json` | EPG cache file location |
+| `EPG_INDEX_MAX_SIZE` | `50000` | Max EPG index entries before LRU eviction |
+
+See `example.env` for complete configuration options.
+
+---
+
+## Building Locally
+
+### Build with Defaults
+```bash
+docker build -t ghcr.io/rydizz214/snappier-server-docker:1.3.4a .
+```
+
+### Build with Custom FFmpeg Version
+```bash
+docker build \
+  --build-arg FFMPEG_VERSION=7.1.1 \
+  -t ghcr.io/rydizz214/snappier-server-docker:1.3.4a .
+```
+
+**Build time**: ~30-45 minutes (FFmpeg compilation)
+
+---
 
 ## Publishing to GHCR
 
-Once the image builds successfully:
-
 ```bash
-# Authenticate once (GitHub PAT with package:write scope)
+# Authenticate (one-time setup)
 echo "${GHCR_TOKEN}" | docker login ghcr.io -u rydizz214 --password-stdin
 
-docker push ghcr.io/rydizz214/snappier-server-docker:1.2.8
+# Push image
+docker push ghcr.io/rydizz214/snappier-server-docker:1.3.4a
+
+# Also tag as latest
+docker tag ghcr.io/rydizz214/snappier-server-docker:1.3.4a \
+           ghcr.io/rydizz214/snappier-server-docker:latest
+docker push ghcr.io/rydizz214/snappier-server-docker:latest
 ```
 
-## Runtime Configuration
+---
 
-The container uses environment variables to control behaviour. The reference `.env.example` includes common options; the most relevant ones are listed below:
+## Troubleshooting
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TZ` | `America/New_York` | Controls timezone for the container and notification timestamps. |
-| `PUSHOVER_USER_KEY` / `PUSHOVER_APP_TOKEN` | _(required)_ | Pushover credentials for alerts. |
-| `NOTIFICATION_HTTP_PORT` | `9080` | Internal webhook port (not exposed by default). |
-| `SNAP_LOG_FILE` | `/logs/snappier.log` | Original Snappier log path; the enhanced log monitor now tails `/root/SnappierServer/server.log`. |
-| `LOG` | `/root/SnappierServer/server.log` | Overrides the log monitor target. |
-| `SNAPPY_API_BASE` | `http://127.0.0.1:8000` | REST endpoint for EPG enrichment. |
-
-## Running with Docker Compose
-
-1. Copy `.env.example` to `.env` and adjust the values (particularly Pushover credentials and media library paths).
-2. Launch the stack:
-
+### Notifications Not Sending
+1. **Check credentials**:
    ```bash
-   docker compose up -d
+   docker compose logs snappier-server | grep -i "pushover"
    ```
 
-3. Tail the notification log to confirm delivery:
-
+2. **Test webhook manually**:
    ```bash
-   docker compose logs -f snappier-server | grep notify
+   curl -X POST http://localhost:9080/notify \
+     -H 'Content-Type: application/json' \
+     -d '{"action":"health_warn","desc":"Test alert"}'
    ```
 
-## Notification Behaviour
+### Container Won't Start
+1. **Check logs**:
+   ```bash
+   docker compose logs snappier-server
+   ```
 
-- **Recording started (live)** – emitted immediately when the Snappier scheduler starts a “record now” request. Uses the 🔴 indicator.
-- **Recording started (scheduled)** – triggered when FFmpeg begins writing the `.ts` file; includes shortened `job_id` plus the full UUID as `job_id_full`.
-- **Recording cancelled** – watches for `saveLiveWithFFmpeg` cancel messages (code 255) and back-fills channel/program metadata from the log tail.
-- **Catch-up downloads** – `catchup_started` / `catchup_completed` / `catchup_failed` still fire, but job IDs are shortened and channel strings are cleaned.
-- **Failure / warning events** – all use the ❗ marker for consistent prominence (`recording_failed`, `catchup_failed`, `health_warn`, `server_error`, etc.).
+2. **Verify volumes**:
+   ```bash
+   docker compose exec snappier-server ls -la /root/SnappierServer
+   ```
 
-## Contributing
+### Missing Channel/Program Metadata
+1. **Verify EPG cache**:
+   ```bash
+   docker compose exec snappier-server \
+     ls -lh /root/SnappierServer/epg/epg_cache.json
+   ```
 
-1. Fork the repository and create a feature branch.
-2. Make your changes and run `docker build` locally.
-3. Update `CHANGELOG.md` with a concise summary.
-4. Open a pull request.
+2. **Check API connectivity**:
+   ```bash
+   docker compose exec snappier-server \
+     curl http://127.0.0.1:8000/epg/status
+   ```
 
-Please include log samples if you’re extending the monitor to handle new event formats—the helpers rely on regexes and a small amount of log context to recover metadata.
+---
+
+## Notification Events
+
+All notifications follow a consistent format with structured JSON payloads:
+
+### Recording Events
+- **recording_started** – Scheduled recording began
+- **recording_live_started** – "Record now" request (🔴 icon)
+- **recording_completed** – Recording finished successfully
+- **recording_failed** – Recording failed
+- **recording_cancelled** – Recording manually cancelled
+
+### Catch-up Events
+- **catchup_started** – Catch-up download initiated
+- **catchup_completed** – Catch-up finished
+- **catchup_failed** – Catch-up failed
+
+### Movie & Series
+- **movie_started** / **movie_completed** / **movie_failed**
+- **series_started** / **series_completed** / **series_failed**
+- Includes TMDB enrichment (ratings, genres, descriptions) if available
+
+### System Events
+- **health_warn** – Health check failed
+- **server_error** – General server error
+- **server_failed** – Critical server failure
+
+---
+
+## Support & Issue Reporting
+
+### Issues with Snappier Server Itself
+For problems with recording, EPG, PVR, or the Snappier Server CLI (by Sarah Bainbridge):
+- **Join**: [Snappier Discord Channel](https://discord.gg/snappier)
+- Include Snappier Server version, logs, and detailed reproduction steps
+- **Note**: Visit [snappierserver.app](https://snappierserver.app) for complete Snappier Server documentation
+
+### Issues with Docker Image & Notifications
+For Docker-specific issues, notification failures, webhook enrichment problems, or build issues:
+- **Open GitHub Issue**: [snappier-server-docker/issues](https://github.com/rydizz214/snappier-server-docker/issues)
+- Include Docker logs, sanitized configuration, `docker --version`, and reproduction steps
+
+### Pull Requests
+- Welcome! Please include test results and update CHANGELOG.md
+- See [DEVELOPER.md](DEVELOPER.md) for architecture and development guide
+
+---
+
+## File Structure
+
+```
+snappier-server-docker/
+├── Dockerfile                          # Multi-stage build: FFmpeg + Runtime
+├── docker-compose.yml                  # Reference compose file
+├── entrypoint.sh                       # Boot sequence
+├── ffmpeg-wrapper.sh                   # HTTP→HTTPS upgrade + resilience
+├── example.env                         # Configuration template
+├── README.md                           # This file
+├── DEVELOPER.md                        # Architecture and development guide
+├── RELEASE_NOTES_v1.3.4a.md            # v1.3.4a release notes
+├── CHANGELOG.md                        # Full version history
+├── notify/
+│   ├── enhanced_webhook.py             # Flask webhook with EPG enrichment
+│   └── tmdb_helper.py                  # Optional TMDB metadata
+└── scripts/
+    ├── log_monitor.sh                  # Log tailer & event parser
+    ├── health_watcher.py               # Health check monitor
+    ├── schedule_watcher.py             # Recording schedule watcher
+    ├── log_rotate.sh                   # Log rotation & cleanup
+    └── timestamp_helpers.py            # Shared timestamp utilities
+```
+
+---
+
+## Acknowledgments
+
+- **Snappier Server** by Sarah Bainbridge – Core recording, PVR, and EPG functionality
+- **FFmpeg** community – Video encoding/transcoding
+- **Pushover** – Notification delivery service
+- Contributors to this Docker wrapper and notification pipeline
+
+---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License – See [LICENSE](LICENSE) for details.
+
+---
+
+**Happy recording! 🎬**
+
+For questions about Snappier Server features, join the [Snappier Discord](https://discord.gg/snappier). For Docker or notification issues, open a [GitHub Issue](https://github.com/rydizz214/snappier-server-docker/issues).
 
