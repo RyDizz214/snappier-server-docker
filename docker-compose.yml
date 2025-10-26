@@ -30,12 +30,14 @@ services:
       #TELEGRAM_CHAT_ID:         "${TELEGRAM_CHAT_ID}"
       #DISCORD_WEBHOOK_URL:      "${DISCORD_WEBHOOK_URL}"
 
-    # Optional: bind host directories for media (uncomment to utilize)
-    # volumes:
-    #  - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
-    #  - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
-    #  - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
-    #  - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
+    volumes:
+      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
+      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
+      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
+      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
+      - /data/recordings/snappier-server/epg:/root/SnappierServer/epg
+      - /data/recordings/snappier-server/Recordings/schedules.json:/root/SnappierServer/Recordings/schedules.json
+      - /data/recordings/snappier-server/server.log:/root/SnappierServer/server.log
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:${PORT}/serverStats"]
