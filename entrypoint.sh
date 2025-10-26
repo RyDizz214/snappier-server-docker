@@ -23,9 +23,9 @@ RECORDINGS_DIR="${RECORDINGS_DIR:-/root/SnappierServer/Recordings}"
 MOVIES_DIR="${MOVIES_DIR:-/root/SnappierServer/Movies}"
 SERIES_DIR="${SERIES_DIR:-/root/SnappierServer/TVSeries}"
 
-SNAP_LOG_FILE="${SNAP_LOG_FILE:-/logs/snappier.log}"
+SNAP_LOG_FILE="${SNAP_LOG_FILE:-/root/SnappierServer/server.log}"
 EPG_CACHE="${EPG_CACHE:-/root/SnappierServer/epg/epg_cache.json}"
-SCHEDULES="${SCHEDULES:-/root/SnappierServer/schedules.json}"
+SCHEDULES="${SCHEDULES:-/root/SnappierServer/Recordings/schedules.json}"
 
 # Notify (Flask webhook)
 NOTIFICATION_HTTP_PORT="${NOTIFICATION_HTTP_PORT:-9080}"
@@ -115,12 +115,6 @@ start_helpers () {
     ( exec python3 -u /opt/scripts/health_watcher.py >>/logs/health_watcher.log 2>&1 ) & echo $! > /tmp/health_watcher.pid
   fi
 
-  # https_watcher.py
-  if [[ -f /opt/scripts/https_watcher.py ]]; then
-    log "Starting https_watcher ..."
-    ( exec python3 -u /opt/scripts/https_watcher.py >>/logs/https_watcher.log 2>&1 ) & echo $! > /tmp/https_watcher.pid
-  fi
-
   # schedule_watcher.py
   if [[ -f /opt/scripts/schedule_watcher.py ]]; then
     log "Starting schedule_watcher ..."
@@ -166,7 +160,7 @@ build_args () {
 # -----------------------------
 cleanup () {
   log "shutting down ..."
-  for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/https_watcher.pid /tmp/schedule_watcher.pid /tmp/log_monitor.pid; do
+  for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/schedule_watcher.pid /tmp/log_monitor.pid; do
     [[ -f "$f" ]] && { kill "$(cat "$f")" 2>/dev/null || true; rm -f "$f"; }
   done
   exit 0
