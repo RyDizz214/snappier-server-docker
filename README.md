@@ -15,9 +15,9 @@ A production-ready Docker image bundling **Snappier Server CLI** (by Sarah Bainb
 - **Real-time EPG (Electronic Program Guide)** – Browse and search current/upcoming programs
 - **PVR (Personal Video Recorder)** – Automatic recording rules, series tracking, episode exclusions
 - **Statically-linked FFmpeg** – x264, x265, libvpx, fdk-aac, opus, freetype, fontconfig
-- **HTTP→HTTPS upgrade** – Automatic protocol upgrade for insecure sources (configurable)
+- **FFmpeg wrapper** – Automatic HTTP→HTTPS upgrade, network resilience, smart reconnection
+- **Catch-up buffer extension** – Automatic 3-minute buffer extension on catch-up downloads to ensure endings don't get cut off
 - **Network resilience** – Automatic reconnection with exponential backoff for stream interruptions
-- **Catch-up buffer extension** – Configurable 3-minute extension on catch-up downloads to prevent truncation
 
 ### Notifications & Monitoring
 - **Intelligent webhook system** – Parses Snappier logs, enriches with EPG metadata, sends to Pushover

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.4a – Production Reliability & Observability
+
+- **Structured logging system** with DEBUG, INFO, WARNING, ERROR levels and ISO 8601 timestamps
+- **Pushover retry logic** with exponential backoff (2s → 4s → 8s) for reliability
+- **Startup credential validation** for Pushover with clear error messages
+- **Request timeouts** (5 seconds) on file operations to prevent handler hangs
+- **Catchup notification improvements** - fixed empty channel handling and added payload validation
+- **FFmpeg wrapper enhancements** - 3-minute buffer extension on catch-up downloads to ensure endings don't get cut off
+- **Code deduplication** - shared timestamp parsing module reduces duplication by 150+ lines
+- **Comprehensive documentation** - detailed README, DEVELOPER guide, and release notes
+- **Zero regressions** - all 20 notification types tested and passing
+
+See [RELEASE_NOTES_v1.3.4a.md](RELEASE_NOTES_v1.3.4a.md) for detailed changelog.
+
 ## 1.2.8 – Notification Quality Update
 
 - Cleaned channel metadata in notification payloads (removes IPTV country prefixes and `.us` suffixes).

@@ -1,14 +1,17 @@
 ########################################
-# 1) Base: FFmpeg + Node.js + jq
+# 1) Build Configuration
 ########################################
-FROM ubuntu:25.04 AS base
-ARG TARGETARCH
-ARG SNAPPIER_SERVER_VERSION=1.0.3
-ARG TZ="America/New_York"
-
 ARG SNAPPIER_SERVER_VERSION=1.3.4a
 ARG SNAPPIER_SERVER_ARCH=linux-x64
 ARG FFMPEG_VERSION=latest
+
+########################################
+# Stage 0: Base - FFmpeg + Node.js + jq
+########################################
+FROM ubuntu:25.04 AS base
+ARG TARGETARCH
+ARG SNAPPIER_SERVER_VERSION=1.3.4a
+ARG TZ="America/New_York"
 
 # ----------------------------------------------------------------------------
 # Stage 1: Build FFmpeg and codec libraries from source
