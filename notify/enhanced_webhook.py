@@ -813,13 +813,14 @@ def notify():
         logger.debug("Catchup event with empty channel", f"action={action}, title={title}, start={start}")
 
     # Prefer cache lookup when we have a start time but no channel (e.g., catchups)
-    # For catchups: search by title ONLY since the timestamp is download time, not air time
+    # For catchups: search by title primarily, but use the start time to disambiguate multiple airings
     # For recordings: use the timestamp to find the exact program
     if start and not channel_hint and not channel_clean:
         if is_catchup:
-            # Search by title only - the payload timestamp is download time, not air time
-            meta = cache_find_program(None, title, None, prefer_past=True)
-            logger.debug(f"Catchup EPG lookup by title only (skipping download timestamp)", f"title={title}")
+            # For catch-ups: search by title, but pass start time to prefer the right airing
+            # (there may be multiple airings/reruns of the same program)
+            meta = cache_find_program(None, title, start, prefer_past=True)
+            logger.debug(f"Catchup EPG lookup by title with timestamp preference", f"title={title}, start={start}")
         else:
             meta = cache_find_program(None, title, start, prefer_past=is_catchup)
     elif SNAPPY_API_ENABLED and (title or channel_hint or channel_clean):
@@ -831,9 +832,8 @@ def notify():
                 meta = alt_meta
             used_api = used_api or bool(alt_meta)
     if not meta:
-        # For fallback search: also skip timestamp for catchups (payload time is download time)
-        lookup_start = None if is_catchup else start
-        meta = cache_find_program(channel_hint or channel_clean, title, lookup_start, prefer_past=is_catchup)
+        # For fallback search: use timestamp for both catch-ups and recordings to find the right airing
+        meta = cache_find_program(channel_hint or channel_clean, title, start, prefer_past=is_catchup)
 
     # Debug: log EPG metadata found for catch-ups
     if is_catchup and meta:
