@@ -553,6 +553,16 @@ def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=Fals
                 # For catch-ups only: prefer entries that aired in the PAST
                 # Catch-ups are always for content that already aired, not upcoming shows
                 if prefer_past:
+                    # Apply distance-based scoring: prefer airings closest to payload time
+                    # This is important for daily shows (e.g., Gutfeld) to select right episode
+                    if diff <= 86400:  # Within 24 hours is reasonable
+                        # Closer to payload = higher score
+                        # Linear decay: 24h diff = 3 points, 0h diff covered by exact/close matches above
+                        hours_diff = diff / 3600
+                        distance_bonus = max(0, 3 - (hours_diff / 8))  # Decreases from 3 to 0 over 24 hours
+                        score += distance_bonus
+                        score_breakdown['distance_bonus'] = round(distance_bonus, 1)
+
                     if time_offset < -3600:  # More than 1 hour in the past
                         # This aired well in the past, give bonus
                         score += 5
