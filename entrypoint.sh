@@ -233,9 +233,35 @@ build_args () {
 # -----------------------------
 cleanup () {
   log "shutting down ..."
+
+  # Kill all background processes with graceful shutdown
   for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/schedule_watcher.pid /tmp/log_monitor.pid /tmp/log_rotate.pid; do
-    [[ -f "$f" ]] && { kill "$(cat "$f")" 2>/dev/null || true; rm -f "$f"; }
+    if [[ -f "$f" ]]; then
+      local pid=$(cat "$f" 2>/dev/null)
+      if [[ -n "$pid" ]]; then
+        # Try graceful shutdown first (SIGTERM)
+        if kill -0 "$pid" 2>/dev/null; then
+          log "Shutting down process $pid gracefully..."
+          kill -TERM "$pid" 2>/dev/null || true
+
+          # Wait up to 5 seconds for graceful shutdown
+          local count=0
+          while kill -0 "$pid" 2>/dev/null && [[ $count -lt 10 ]]; do
+            sleep 0.5
+            count=$((count + 1))
+          done
+
+          # Force kill if still running
+          if kill -0 "$pid" 2>/dev/null; then
+            log "Process $pid did not shutdown gracefully, forcing kill..."
+            kill -9 "$pid" 2>/dev/null || true
+          fi
+        fi
+      fi
+      rm -f "$f"
+    fi
   done
+
   exit 0
 }
 trap cleanup SIGINT SIGTERM
