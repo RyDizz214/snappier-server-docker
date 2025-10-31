@@ -32,6 +32,11 @@ NOTIFICATION_HTTP_PORT="${NOTIFICATION_HTTP_PORT:-9080}"
 NOTIFICATION_BIND="${NOTIFICATION_BIND:-0.0.0.0}"
 NOTIFICATION_SSE_PATH="${NOTIFICATION_SSE_PATH:-/events}"
 
+# HTTPS upgrade configuration
+# Hosts that are safe to use HTTP (won't be upgraded to HTTPS)
+ALLOW_HTTP_HOSTS="${ALLOW_HTTP_HOSTS:-localhost,127.0.0.1,snappier-server,pro.business-cdn.me}"
+export ALLOW_HTTP_HOSTS
+
 # Health monitor helpers
 HEALTH_INTERVAL_SEC="${HEALTH_INTERVAL_SEC:-30}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-/serverStats}"
@@ -124,7 +129,15 @@ start_notify () {
     export NOTIFICATION_HTTP_BIND="${NOTIFICATION_BIND}"
     export WEBHOOK_LOG_LEVEL="${WEBHOOK_LOG_LEVEL:-DEBUG}"
     cd /opt/notify
-    exec python3 -u /opt/notify/enhanced_webhook.py >>"${LOG_ROOT}/notify.log" 2>&1
+    exec gunicorn \
+      --workers=4 \
+      --worker-class=sync \
+      --bind="${NOTIFICATION_BIND}:${NOTIFICATION_HTTP_PORT}" \
+      --timeout=30 \
+      --access-logfile=/dev/stdout \
+      --error-logfile=/dev/stdout \
+      --log-level=info \
+      enhanced_webhook:app >>"${LOG_ROOT}/notify.log" 2>&1
   ) &
 
   local new_pid=$!

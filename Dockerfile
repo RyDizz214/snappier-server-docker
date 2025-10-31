@@ -135,7 +135,7 @@ RUN ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
 COPY --from=ffmpeg-build /usr/local /usr/local
 
 # Python dependencies used by helper scripts
-RUN python3 -m pip install --no-cache-dir --break-system-packages flask requests watchdog
+RUN python3 -m pip install --no-cache-dir --break-system-packages flask requests watchdog gunicorn
 
 WORKDIR /opt
 RUN mkdir -p /logs /root/SnappierServer/epg /root/SnappierServer
