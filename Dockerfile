@@ -116,7 +116,7 @@ ARG SNAPPIER_SERVER_ARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     nodejs npm \
-    curl jq ca-certificates tzdata tini dumb-init procps iproute2 inotify-tools \
+    curl jq ca-certificates tzdata tini dumb-init procps iproute2 inotify-tools coreutils \
     unzip tar xz-utils \
     libssl3 \
     libxcb1 libxcb-shm0 libxcb-shape0 libxcb-xfixes0 \

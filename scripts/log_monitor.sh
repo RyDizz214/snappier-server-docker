@@ -103,7 +103,7 @@ post_action() {
     # Increase timeout for movie/series/catchup actions (EPG/TMDB lookup takes time)
     local timeout=12  # Default 12s (gunicorn worker timeout is 30s)
     if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* ]]; then
-      timeout=25  # Increased to accommodate EPG/TMDB lookup + webhook processing
+      timeout=20  # Accommodate EPG/TMDB lookup + webhook processing, but avoid gunicorn timeout (30s)
       max_attempts=2  # Reduce retries since timeout is higher
     fi
 
@@ -659,6 +659,7 @@ declare -A JOB_END_LOCAL=()     # job_id -> formatted local end
 declare -A JOB_DESC=()          # job_id -> description/overview (if known)
 declare -A JOB_YEAR=()          # job_id -> release year for movies
 declare -A JOB_TYPE=()          # job_id -> content type/genre for movies
+declare -A REMUX_EXIT_CODE=()   # ts_filename -> exit code from [remux] ffmpeg exited event
 
 PENDING_LIVE_PROGRAM=""
 PENDING_LIVE_CHANNEL=""
@@ -758,7 +759,7 @@ while IFS= read -r line; do
     kind="${JOB_KIND[$job]:-catchup}"
 
     # If remux is enabled, skip notification here - remux completion will send it with the final .mkv file
-    if [[ "${ENABLE_REMUX:-true}" == "true" ]] || [[ "${ENABLE_REMUX:-true}" == "1" ]]; then
+    if [[ "${ENABLE_REMUX:-0}" == "1" ]] || [[ "${ENABLE_REMUX:-0}" == "true" ]]; then
       log "Catch-up download finished (job: $job), waiting for remux completion to send notification"
       update_size; continue
     fi
@@ -1099,6 +1100,9 @@ while IFS= read -r line; do
       remember_job "$uuid" "$kind" "$program" "$channel"
     fi
 
+    # Store the remux exit code for validation when we see the delete event
+    REMUX_EXIT_CODE["$ts"]="$code"
+
     # Only send notification on FAILURE (code != 0)
     # Success notifications will be sent by remux delete handler
     if [[ "$code" == "0" ]]; then
@@ -1174,6 +1178,14 @@ while IFS= read -r line; do
     uuid="${M[uuid]:-}"
     kind="${M[kind]:-recording}"
 
+    # Validate the remux exit code - should have already seen a successful exit event
+    prior_exit_code="${REMUX_EXIT_CODE["$ts"]:-}"
+    if [[ -z "$prior_exit_code" ]]; then
+      log "WARNING: Delete event for $ts but no prior exit event in logs"
+    elif [[ "$prior_exit_code" != "0" ]]; then
+      log "WARNING: Delete event for $ts but prior exit had code=$prior_exit_code (non-zero failure)"
+    fi
+
     # Skip remux delete notifications for movies - they'll be handled by SaveMovie event
     if [[ "$ts" == */Movies/* ]]; then
       kind="movie"
@@ -1204,15 +1216,42 @@ while IFS= read -r line; do
     code="0"
     final_file="$(final_media_path "$ts" "$code")"
 
-    # Determine action
-    if [[ "$kind" == "catchup" ]]; then
-      action="catchup_completed"
-    elif [[ "$kind" == "movie" ]]; then
-      action="movie_completed"
-    elif [[ "$kind" == "series" ]]; then
-      action="series_completed"
+    # Validate that the .mkv file exists and is not empty before marking as success
+    if [[ ! -f "$final_file" ]]; then
+      log "ERROR: Remux delete event for $ts but .mkv file missing: $final_file"
+      code="1"
+    elif [[ ! -s "$final_file" ]]; then
+      log "ERROR: Remux delete event for $ts but .mkv file is empty: $final_file"
+      code="1"
     else
-      action="recording_completed"
+      # Log successful remux with file size
+      file_size_bytes=$(stat -c%s "$final_file" 2>/dev/null || echo "unknown")
+      log "Remux completed successfully: $final_file (size: $file_size_bytes bytes)"
+    fi
+
+    # Determine action based on success/failure
+    if [[ "$code" != "0" ]]; then
+      # Remux failed (file missing or empty)
+      if [[ "$kind" == "catchup" ]]; then
+        action="catchup_failed"
+      elif [[ "$kind" == "movie" ]]; then
+        action="movie_failed"
+      elif [[ "$kind" == "series" ]]; then
+        action="series_failed"
+      else
+        action="recording_failed"
+      fi
+    else
+      # Remux succeeded
+      if [[ "$kind" == "catchup" ]]; then
+        action="catchup_completed"
+      elif [[ "$kind" == "movie" ]]; then
+        action="movie_completed"
+      elif [[ "$kind" == "series" ]]; then
+        action="series_completed"
+      else
+        action="recording_completed"
+      fi
     fi
 
     # Send notification with complete metadata

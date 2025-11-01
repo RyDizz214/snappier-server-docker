@@ -18,6 +18,7 @@ EPG_INTERVAL_HOURS="${EPG_INTERVAL_HOURS:-${EPG_REFRESH_INTERVAL:-24}}"
 
 ENABLE_REMUX="${ENABLE_REMUX:-0}"
 DOWNLOAD_SPEED_LIMIT_MBS="${DOWNLOAD_SPEED_LIMIT_MBS:-0}"
+GRACEFUL_SHUTDOWN_TIMEOUT="${GRACEFUL_SHUTDOWN_TIMEOUT:-10}"  # seconds to wait for processes to shutdown gracefully
 
 RECORDINGS_DIR="${RECORDINGS_DIR:-/root/SnappierServer/Recordings}"
 MOVIES_DIR="${MOVIES_DIR:-/root/SnappierServer/Movies}"
@@ -247,6 +248,20 @@ build_args () {
 cleanup () {
   log "shutting down ..."
 
+  # Give log_monitor extra time to process pending remux completion events
+  # This is critical for catch-ups with remux enabled - they wait for [remux] deleted event
+  # to send the catchup_completed notification
+  if [[ -f /tmp/log_monitor.pid ]]; then
+    local log_monitor_pid=$(cat /tmp/log_monitor.pid 2>/dev/null)
+    if [[ -n "$log_monitor_pid" ]] && kill -0 "$log_monitor_pid" 2>/dev/null; then
+      log "Allowing log_monitor ($log_monitor_pid) to process pending events before shutdown (waiting 10 seconds)..."
+      # Wait for log_monitor to catch up with the log file
+      # This allows remux completion events to be properly processed
+      sleep 10  # Give time for final log entries to be written and processed
+      log "Proceeding with graceful shutdown of all processes (timeout: ${GRACEFUL_SHUTDOWN_TIMEOUT}s)..."
+    fi
+  fi
+
   # Kill all background processes with graceful shutdown
   for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/schedule_watcher.pid /tmp/log_monitor.pid /tmp/log_rotate.pid; do
     if [[ -f "$f" ]]; then
@@ -257,9 +272,11 @@ cleanup () {
           log "Shutting down process $pid gracefully..."
           kill -TERM "$pid" 2>/dev/null || true
 
-          # Wait up to 5 seconds for graceful shutdown
+          # Wait up to GRACEFUL_SHUTDOWN_TIMEOUT seconds for graceful shutdown
+          # to allow remux operations to complete and be logged
+          local max_iterations=$((GRACEFUL_SHUTDOWN_TIMEOUT * 2))  # 0.5s per iteration
           local count=0
-          while kill -0 "$pid" 2>/dev/null && [[ $count -lt 10 ]]; do
+          while kill -0 "$pid" 2>/dev/null && [[ $count -lt $max_iterations ]]; do
             sleep 0.5
             count=$((count + 1))
           done

@@ -260,6 +260,24 @@ main(){
     dest="${ARGS[-1]}"
     base_args=("${ARGS[@]:0:${#ARGS[@]}-1}")
 
+    # Log remux start
+    REMUX_START_TIME=$(date +%s)
+    log "Starting remux operation: $(basename "${base_args[-1]}" .ts) -> $(basename "$dest")"
+
+    # Check available disk space before starting remux
+    # Extract directory from destination path
+    dest_dir="$(dirname "$dest")"
+    available_space=$(df "$dest_dir" 2>/dev/null | awk 'NR==2 {print $4}')  # Available in 1K blocks
+    available_gb=$((available_space / 1024 / 1024))  # Convert to GB
+
+    if [[ -n "$available_space" && "$available_gb" -lt 5 ]]; then
+      log "ERROR: Insufficient disk space for remux: only ${available_gb}GB available, need at least 5GB"
+      log "Remux cannot proceed - destination directory: $dest_dir"
+      exit 1
+    elif [[ -n "$available_gb" ]]; then
+      log "Disk space check: ${available_gb}GB available for remux"
+    fi
+
     copy_args=("${base_args[@]}")
     copy_args+=(
       -fflags +discardcorrupt
@@ -271,11 +289,31 @@ main(){
       "$dest"
     )
 
-    if run_ffmpeg "${copy_args[@]}"; then
+    # Run with 30-minute timeout for remux operation
+    # Note: Must inline ffmpeg call instead of using run_ffmpeg() function,
+    # because timeout cannot execute shell functions (only binary executables)
+    if [[ "${SAW_NET_INPUT}" == "1" ]]; then
+      log "Executing remux (strategy 1): timeout 1800 ${FFMPEG_REAL} ${NET_FLAGS[*]} ... ${copy_args[-1]}"
+      set +e
+      timeout 1800 "${FFMPEG_REAL}" "${NET_FLAGS[@]}" "${copy_args[@]}" >> "${LOG_FILE}" 2>&1
+      strategy1_status=$?
+      set -e
+    else
+      log "Executing remux (strategy 1): timeout 1800 ${FFMPEG_REAL} ... ${copy_args[-1]}"
+      set +e
+      timeout 1800 "${FFMPEG_REAL}" "${copy_args[@]}" >> "${LOG_FILE}" 2>&1
+      strategy1_status=$?
+      set -e
+    fi
+
+    if [[ $strategy1_status -eq 0 ]]; then
+      REMUX_END_TIME=$(date +%s)
+      REMUX_DURATION=$((REMUX_END_TIME - REMUX_START_TIME))
+      log "Remux strategy 1 (copy) succeeded in ${REMUX_DURATION}s"
       exit 0
     fi
 
-    status=$?
+    status=$strategy1_status
     log "Remux copy path failed (status=${status}), trying to preserve audio codec"
 
     # Fallback 1: Try to preserve original audio codec (AC3/E-AC3) with video copy
@@ -302,12 +340,31 @@ main(){
       "$dest"
     )
 
-    if run_ffmpeg "${preserve_args[@]}"; then
-      log "Remux succeeded by preserving audio codec"
+    # Run with 30-minute timeout for remux operation
+    # Note: Must inline ffmpeg call instead of using run_ffmpeg() function,
+    # because timeout cannot execute shell functions (only binary executables)
+    if [[ "${SAW_NET_INPUT}" == "1" ]]; then
+      log "Executing remux (strategy 2): timeout 1800 ${FFMPEG_REAL} ${NET_FLAGS[*]} ... ${preserve_args[-1]}"
+      set +e
+      timeout 1800 "${FFMPEG_REAL}" "${NET_FLAGS[@]}" "${preserve_args[@]}" >> "${LOG_FILE}" 2>&1
+      strategy2_status=$?
+      set -e
+    else
+      log "Executing remux (strategy 2): timeout 1800 ${FFMPEG_REAL} ... ${preserve_args[-1]}"
+      set +e
+      timeout 1800 "${FFMPEG_REAL}" "${preserve_args[@]}" >> "${LOG_FILE}" 2>&1
+      strategy2_status=$?
+      set -e
+    fi
+
+    if [[ $strategy2_status -eq 0 ]]; then
+      REMUX_END_TIME=$(date +%s)
+      REMUX_DURATION=$((REMUX_END_TIME - REMUX_START_TIME))
+      log "Remux strategy 2 (preserve audio) succeeded in ${REMUX_DURATION}s"
       exit 0
     fi
 
-    status=$?
+    status=$strategy2_status
     log "Audio codec preservation failed (status=${status}), transcoding to AAC with channel layout preservation"
 
     # Fallback 2: Transcode audio to AAC while preserving channel layout
@@ -339,8 +396,31 @@ main(){
       "$dest"
     )
 
-    run_ffmpeg "${transcode_args[@]}"
-    exit $?
+    # Run with 30-minute timeout for remux operation
+    # Note: Must inline ffmpeg call instead of using run_ffmpeg() function,
+    # because timeout cannot execute shell functions (only binary executables)
+    if [[ "${SAW_NET_INPUT}" == "1" ]]; then
+      log "Executing remux (strategy 3): timeout 1800 ${FFMPEG_REAL} ${NET_FLAGS[*]} ... ${transcode_args[-1]}"
+    else
+      log "Executing remux (strategy 3): timeout 1800 ${FFMPEG_REAL} ... ${transcode_args[-1]}"
+    fi
+
+    set +e
+    if [[ "${SAW_NET_INPUT}" == "1" ]]; then
+      timeout 1800 "${FFMPEG_REAL}" "${NET_FLAGS[@]}" "${transcode_args[@]}" >> "${LOG_FILE}" 2>&1
+    else
+      timeout 1800 "${FFMPEG_REAL}" "${transcode_args[@]}" >> "${LOG_FILE}" 2>&1
+    fi
+    remux_exit_code=$?
+    set -e
+    REMUX_END_TIME=$(date +%s)
+    REMUX_DURATION=$((REMUX_END_TIME - REMUX_START_TIME))
+    if [[ $remux_exit_code -eq 0 ]]; then
+      log "Remux strategy 3 (transcode audio) succeeded in ${REMUX_DURATION}s"
+    else
+      log "Remux strategy 3 (transcode audio) failed with code=$remux_exit_code after ${REMUX_DURATION}s"
+    fi
+    exit $remux_exit_code
   fi
 
   # Only add network flags if there is at least one network input
