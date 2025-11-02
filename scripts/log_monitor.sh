@@ -700,20 +700,31 @@ for path in paths:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh) or {}
-    except Exception:
+    except FileNotFoundError:
+        print(f"[schedule_cleanup] Schedule file not found: {path}", file=sys.stderr)
         continue
+    except Exception as e:
+        print(f"[schedule_cleanup] Error reading {path}: {e}", file=sys.stderr)
+        continue
+
     if job not in data:
+        print(f"[schedule_cleanup] Job {job} not found in {path}", file=sys.stderr)
         continue
+
     try:
         del data[job]
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
+        print(f"[schedule_cleanup] ✓ Successfully removed job {job} from {path}", file=sys.stderr)
         removed = True
-    except Exception:
+    except Exception as e:
+        print(f"[schedule_cleanup] Error deleting from {path}: {e}", file=sys.stderr)
         continue
 
 if removed:
     print("removed")
+else:
+    print(f"[schedule_cleanup] WARNING: Job {job} was not found in any schedule file", file=sys.stderr)
 PY
 }
 
@@ -1470,9 +1481,11 @@ while IFS= read -r line; do
 
     current_status="$(get_job_status "$job")"
     if [[ "$current_status" == "movie_completed" || "$current_status" == "movie_failed" ]]; then
-      log "Skipping duplicate SaveMovie notification for job $job (already $current_status)"
+      log "SaveMovie: Detected duplicate event for job $job (already $current_status)"
       if [[ "$code" == "0" ]]; then
+        log "SaveMovie: Attempting cleanup on duplicate for job $job (exit_code=0)"
         delete_schedule_entry "$job"
+        log "SaveMovie: Cleanup completed on duplicate for job $job"
       fi
       update_size; continue
     fi
@@ -1536,7 +1549,11 @@ while IFS= read -r line; do
     post_action "$action" "${args[@]}"
     set_job_status "$job" "$action"
     if [[ "$code" == "0" ]]; then
+      log "SaveMovie: Attempting cleanup for job $job (exit_code=0)"
       delete_schedule_entry "$job"
+      log "SaveMovie: Cleanup completed for job $job"
+    else
+      log "SaveMovie: Skipping cleanup for job $job (exit_code=$code)"
     fi
     update_size; continue
   fi
