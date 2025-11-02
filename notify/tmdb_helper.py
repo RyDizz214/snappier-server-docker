@@ -64,6 +64,8 @@ def parse_movie_title_year(program_name, filepath=None):
         match = re.search(r'^(.+?)\s*[-–]\s*(\d{4})$', program_name)
         if match:
             title = match.group(1).strip()
+            # Strip channel/quality prefixes like "4K:", "HD:", "EN:", etc.
+            title = re.sub(r'^(4K|HD|UHD|EN|US|UK):\s*', '', title, flags=re.IGNORECASE)
             year = int(match.group(2))
             return (title, year)
 
@@ -71,11 +73,15 @@ def parse_movie_title_year(program_name, filepath=None):
         match = re.search(r'^(.+?)\s*\((\d{4})\)$', program_name)
         if match:
             title = match.group(1).strip()
+            # Strip channel/quality prefixes like "4K:", "HD:", "EN:", etc.
+            title = re.sub(r'^(4K|HD|UHD|EN|US|UK):\s*', '', title, flags=re.IGNORECASE)
             year = int(match.group(2))
             return (title, year)
 
         # Use program name as-is if no year found
         title = program_name.strip()
+        # Strip channel/quality prefixes from fallback title as well
+        title = re.sub(r'^(4K|HD|UHD|EN|US|UK):\s*', '', title, flags=re.IGNORECASE)
 
     # Try filepath if program name didn't yield results
     if filepath and not year:
