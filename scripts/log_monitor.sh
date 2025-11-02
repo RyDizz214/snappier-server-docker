@@ -690,16 +690,32 @@ delete_schedule_entry(){
 
   log "Attempting to delete schedule via API: $url"
 
-  # Call the DELETE endpoint
-  response=$(curl -fsS -X DELETE "$url" 2>&1)
-  exit_code=$?
+  # Call the DELETE endpoint and capture HTTP status code separately
+  # Use -w to get status code without -f flag (which crashes on 4xx/5xx)
+  local http_code response
+  response=$(curl -sS -X DELETE -w "\n%{http_code}" "$url" 2>&1)
+  local curl_exit=$?
 
-  if [[ $exit_code -eq 0 ]]; then
-    log "[schedule_cleanup] ✓ Successfully deleted job $job via API"
+  # Extract status code from last line
+  http_code=$(echo "$response" | tail -n1)
+  response=$(echo "$response" | head -n-1)
+
+  # Handle curl errors (connection failures, etc)
+  if [[ $curl_exit -ne 0 ]]; then
+    log "[schedule_cleanup] ERROR: Curl request failed for job $job (exit code: $curl_exit)"
+    [[ -n "$response" ]] && log "[schedule_cleanup] Response: $response"
+    return 1
+  fi
+
+  # Treat 200 (deleted) and 404 (not found) as success
+  # 404 means the schedule doesn't exist - cleanup goal achieved either way
+  if [[ "$http_code" == "200" ]] || [[ "$http_code" == "404" ]]; then
+    log "[schedule_cleanup] ✓ Successfully deleted job $job via API (HTTP $http_code)"
     echo "removed"
     return 0
   else
-    log "[schedule_cleanup] ERROR: Failed to delete job $job via API (exit code: $exit_code)"
+    # Actual error (5xx, timeout, etc)
+    log "[schedule_cleanup] ERROR: Failed to delete job $job via API (HTTP $http_code)"
     [[ -n "$response" ]] && log "[schedule_cleanup] Response: $response"
     return 1
   fi
