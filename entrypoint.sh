@@ -28,7 +28,7 @@ SNAP_LOG_FILE="${SNAP_LOG_FILE:-/root/SnappierServer/server.log}"
 EPG_CACHE="${EPG_CACHE:-/root/SnappierServer/epg/epg_cache.json}"
 SCHEDULES="${SCHEDULES:-/root/SnappierServer/Recordings/schedules.json}"
 
-# Notify (Flask webhook)
+# Notify (FastAPI webhook)
 NOTIFICATION_HTTP_PORT="${NOTIFICATION_HTTP_PORT:-9080}"
 NOTIFICATION_BIND="${NOTIFICATION_BIND:-0.0.0.0}"
 NOTIFICATION_SSE_PATH="${NOTIFICATION_SSE_PATH:-/events}"
@@ -130,13 +130,11 @@ start_notify () {
     export NOTIFICATION_HTTP_BIND="${NOTIFICATION_BIND}"
     export WEBHOOK_LOG_LEVEL="${WEBHOOK_LOG_LEVEL:-DEBUG}"
     cd /opt/notify
-    exec gunicorn \
+    exec uvicorn \
+      --host="${NOTIFICATION_BIND}" \
+      --port="${NOTIFICATION_HTTP_PORT}" \
       --workers=4 \
-      --worker-class=sync \
-      --bind="${NOTIFICATION_BIND}:${NOTIFICATION_HTTP_PORT}" \
-      --timeout=30 \
-      --access-logfile=/dev/stdout \
-      --error-logfile=/dev/stdout \
+      --timeout-keep-alive=30 \
       --log-level=info \
       enhanced_webhook:app >>"${LOG_ROOT}/notify.log" 2>&1
   ) &

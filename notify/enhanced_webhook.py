@@ -1,7 +1,11 @@
-from flask import Flask, request, jsonify
-import json, os, time, requests, urllib.parse, re, logging, sys
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
+import json, os, time, urllib.parse, re, logging, sys
 from datetime import datetime, timezone, timedelta
 from collections import OrderedDict
+import httpx
+import asyncio
+import aiofiles
 
 # Structured logging setup
 class StructuredLogger:
@@ -45,7 +49,7 @@ except ImportError:
     TMDB_AVAILABLE = False
     logger.warning("TMDB helper not available", "Movie/series metadata enrichment disabled")
 
-app = Flask(__name__)
+app = FastAPI(title="Snappier Webhook", version="1.0")
 
 PO_USER  = os.environ.get('PUSHOVER_USER_KEY','')
 PO_TOKEN = os.environ.get('PUSHOVER_APP_TOKEN','')
@@ -197,7 +201,7 @@ def _normalize_start(raw):
     except Exception:
         return None
 
-def _load_epg_cache():
+async def _load_epg_cache():
     global _epg_cache_data, _epg_cache_mtime, _epg_index, _epg_channel_display
     path = EPG_CACHE
     try:
@@ -206,16 +210,16 @@ def _load_epg_cache():
         mtime = None
 
     if _epg_cache_data is None or mtime != _epg_cache_mtime:
-        _epg_cache_data = load_json(path) or {}
+        _epg_cache_data = await load_json(path) or {}
         _epg_cache_mtime = mtime
         _epg_index = None
         _epg_channel_display = {}
 
     return _epg_cache_data
 
-def _ensure_epg_index():
+async def _ensure_epg_index():
     global _epg_index, _epg_channel_display, _cache_stats
-    data = _load_epg_cache()
+    data = await _load_epg_cache()
     if _epg_index is not None:
         _cache_stats['epg_hits'] += 1
         return data, _epg_index
@@ -268,11 +272,12 @@ def _ensure_epg_index():
     _epg_index = {'by_start': by_start, 'by_title': by_title}
     return data, _epg_index
 
-def load_json(path, timeout_sec=5):
-    """Load JSON from file (timeout_sec parameter kept for compatibility but not used with signals)"""
+async def load_json(path, timeout_sec=5):
+    """Load JSON from file asynchronously"""
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            result = json.load(f)
+        async with aiofiles.open(path, 'r', encoding='utf-8') as f:
+            content = await f.read()
+            result = json.loads(content)
         return result
     except FileNotFoundError:
         logger.debug(f"File not found: {path}")
@@ -290,7 +295,7 @@ def _host_from_url(url: str):
     except Exception:
         return None
 
-def _probe_https_once(url_http: str) -> bool:
+async def _probe_https_once(url_http: str) -> bool:
     global _cache_stats
     if not url_http.startswith('http://'):
         return False
@@ -303,37 +308,38 @@ def _probe_https_once(url_http: str) -> bool:
 
     _cache_stats['https_probes'] += 1
     try:
-        if PROBE_METHOD == 'GET':
-            r = requests.get(https_url, timeout=PROBE_TIMEOUT, stream=True)
-        else:
-            r = requests.head(https_url, timeout=PROBE_TIMEOUT, allow_redirects=True)
-        ok = 200 <= r.status_code < 400
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT) as client:
+            if PROBE_METHOD == 'GET':
+                r = await client.get(https_url, follow_redirects=True)
+            else:
+                r = await client.head(https_url, follow_redirects=True)
+            ok = 200 <= r.status_code < 400
     except Exception:
         ok = False
     _https_support[host] = ok  # BoundedDict will handle eviction
     return ok
 
-def _preflight_scan():
+async def _preflight_scan():
     try:
         for path in (SCHEDULES, EPG_CACHE):
-            data = load_json(path)
+            data = await load_json(path)
             if not data: continue
-            def walk(o, seen=0, limit=2000):
+            async def walk(o, seen=0, limit=2000):
                 if seen >= limit: return seen
                 if isinstance(o, dict):
                     for _, v in o.items():
-                        seen = walk(v, seen, limit)
+                        seen = await walk(v, seen, limit)
                         if seen >= limit: break
                 elif isinstance(o, list):
                     for v in o:
-                        seen = walk(v, seen, limit)
+                        seen = await walk(v, seen, limit)
                         if seen >= limit: break
                 elif isinstance(o, str):
                     if o.startswith('http://'):
-                        _probe_https_once(o)
+                        await _probe_https_once(o)
                         seen += 1
                 return seen
-            walk(data, 0, 2000)
+            await walk(data, 0, 2000)
     except Exception:
         pass
 
@@ -343,7 +349,7 @@ def _api_headers():
         h['Authorization'] = f'Bearer {SNAPPY_API_KEY}'
     return h
 
-def api_search(title=None, channel=None, limit=10):
+async def api_search(title=None, channel=None, limit=10):
     if not SNAPPY_API_ENABLED:
         return None, {}
     try:
@@ -352,14 +358,15 @@ def api_search(title=None, channel=None, limit=10):
         if channel: params['channel'] = channel
         if limit:   params['limit'] = str(limit)
         url = f"{SNAPPY_API_BASE}/epg/search"
-        r = requests.get(url, params=params, headers=_api_headers(), timeout=SNAPPY_API_TIMEOUT)
-        if not r.ok:
-            return None, {}
-        hits = r.json()
-        meta = {'total': r.headers.get('X-Total-Results'), 'returned': r.headers.get('X-Returned-Results')}
-        if isinstance(hits, list) and hits:
-            return hits, meta
-        return None, meta
+        async with httpx.AsyncClient(timeout=SNAPPY_API_TIMEOUT) as client:
+            r = await client.get(url, params=params, headers=_api_headers())
+            if not r.is_success:
+                return None, {}
+            hits = r.json()
+            meta = {'total': r.headers.get('X-Total-Results'), 'returned': r.headers.get('X-Returned-Results')}
+            if isinstance(hits, list) and hits:
+                return hits, meta
+            return None, meta
     except Exception:
         return None, {}
 
@@ -418,21 +425,21 @@ def _pick_best_from_list(lst, want_title=None, want_start=None):
                 return cev
     return best
 
-def api_find_program(channel=None, title=None, start=None):
+async def api_find_program(channel=None, title=None, start=None):
     hits, meta = (None, {})
     if title and channel:
-        hits, meta = api_search(title=title, channel=channel, limit=10)
+        hits, meta = await api_search(title=title, channel=channel, limit=10)
         if hits: return _pick_best_from_list(hits, title, start), meta
     if title:
-        hits, meta = api_search(title=title, limit=10)
+        hits, meta = await api_search(title=title, limit=10)
         if hits: return _pick_best_from_list(hits, title, start), meta
     if channel:
-        hits, meta = api_search(channel=channel, limit=10)
+        hits, meta = await api_search(channel=channel, limit=10)
         if hits: return _pick_best_from_list(hits, want_start=start), meta
     return None, meta
 
-def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=False):
-    data, index = _ensure_epg_index()
+async def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=False):
+    data, index = await _ensure_epg_index()
     if not data:
         return None
 
@@ -657,7 +664,7 @@ def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=Fals
         meta.setdefault('channelClean', clean_channel_name(chan_key))
     return meta
 
-def pushover_send(title, message, url=None, url_title=None, priority=0, attachment_path=None):
+async def pushover_send(title, message, url=None, url_title=None, priority=0, attachment_path=None):
     if not (PO_USER and PO_TOKEN):
         logger.error("Pushover not configured", f"PO_USER={'*' * 8 if PO_USER else 'missing'} PO_TOKEN={'*' * 8 if PO_TOKEN else 'missing'}")
         return {'ok': False, 'error':'Pushover not configured'}
@@ -672,55 +679,56 @@ def pushover_send(title, message, url=None, url_title=None, priority=0, attachme
 
     for attempt in range(max_retries):
         try:
-            # Handle attachment - read into memory to avoid file handle leak
-            if attachment_path and os.path.isfile(attachment_path):
-                try:
-                    # Read file into memory before passing to requests
-                    with open(attachment_path, 'rb') as fh:
-                        file_data = fh.read()
-                    # File handle is now closed, safe to pass data to requests
-                    files = {'attachment': (os.path.basename(attachment_path), file_data, 'image/gif')}
-                    r = requests.post('https://api.pushover.net/1/messages.json', data=data, files=files, timeout=15)
-                except (OSError, IOError) as e:
-                    # Log the error and fall back to message without attachment
-                    logger.warning(f"Failed to read attachment {attachment_path}", str(e))
-                    r = requests.post('https://api.pushover.net/1/messages.json', data=data, timeout=15)
-            else:
-                # No attachment
-                r = requests.post('https://api.pushover.net/1/messages.json', data=data, timeout=15)
+            async with httpx.AsyncClient(timeout=15) as client:
+                # Handle attachment - read into memory to avoid file handle leak
+                if attachment_path and os.path.isfile(attachment_path):
+                    try:
+                        # Read file into memory asynchronously
+                        async with aiofiles.open(attachment_path, 'rb') as fh:
+                            file_data = await fh.read()
+                        # File handle is now closed, safe to pass data to httpx
+                        files = {'attachment': (os.path.basename(attachment_path), file_data, 'image/gif')}
+                        r = await client.post('https://api.pushover.net/1/messages.json', data=data, files=files)
+                    except (OSError, IOError) as e:
+                        # Log the error and fall back to message without attachment
+                        logger.warning(f"Failed to read attachment {attachment_path}", str(e))
+                        r = await client.post('https://api.pushover.net/1/messages.json', data=data)
+                else:
+                    # No attachment
+                    r = await client.post('https://api.pushover.net/1/messages.json', data=data)
 
-            # Check if request was successful
-            if r.status_code == 200:
-                try:
-                    result = r.json()
-                    if result.get('status') == 1 or result.get('ok'):
-                        logger.debug(f"Pushover sent successfully (attempt {attempt + 1})")
-                        return result
-                except Exception:
-                    pass
+                # Check if request was successful
+                if r.status_code == 200:
+                    try:
+                        result = r.json()
+                        if result.get('status') == 1 or result.get('ok'):
+                            logger.debug(f"Pushover sent successfully (attempt {attempt + 1})")
+                            return result
+                    except Exception:
+                        pass
 
-            # If we got here, request failed
-            if attempt < max_retries - 1:
-                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
-                logger.warning(f"Pushover request failed", f"status={r.status_code}, retry in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
-            else:
-                logger.error(f"Pushover request failed after {max_retries} attempts", f"status={r.status_code}")
-                return r.json() if r.status_code == 200 else {'ok': r.ok, 'status': r.status_code}
+                # If we got here, request failed
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+                    logger.warning(f"Pushover request failed", f"status={r.status_code}, retry in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Pushover request failed after {max_retries} attempts", f"status={r.status_code}")
+                    return r.json() if r.status_code == 200 else {'ok': r.is_success, 'status': r.status_code}
 
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             if attempt < max_retries - 1:
                 wait_time = retry_delay * (2 ** attempt)
                 logger.warning(f"Pushover request timeout", f"retry in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
+                await asyncio.sleep(wait_time)
             else:
                 logger.error(f"Pushover request timeout after {max_retries} attempts")
                 return {'ok': False, 'error': 'timeout'}
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             if attempt < max_retries - 1:
                 wait_time = retry_delay * (2 ** attempt)
                 logger.warning(f"Pushover request error", f"{type(e).__name__}, retry in {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
+                await asyncio.sleep(wait_time)
             else:
                 logger.error(f"Pushover request error after {max_retries} attempts", str(e))
                 return {'ok': False, 'error': str(e)}
@@ -773,18 +781,24 @@ def _as_int(x, default=None):
     try: return int(x)
     except: return default
 
-@app.route('/notify', methods=['POST'])
-def notify():
+@app.post('/notify')
+async def notify(request: Request):
     payload = None
     try:
-        if request.is_json:
-            payload = request.get_json(force=True, silent=True)
+        # Read body once - it can't be re-read in FastAPI
+        body = await request.body()
+        if body:
+            body_str = body.decode('utf-8', errors='replace')
+            try:
+                payload = json.loads(body_str)
+            except json.JSONDecodeError:
+                # If JSON parsing fails, treat as raw text
+                payload = {'text': body_str}
         else:
-            raw = request.get_data(as_text=True) or ''
-            try: payload = json.loads(raw)
-            except Exception: payload = {'text': raw}
-    except Exception:
-        payload = {'text': request.get_data(as_text=True) or ''}
+            payload = {}
+    except Exception as e:
+        logger.error("Failed to parse request body", str(e))
+        payload = {'text': ''}
 
     # Preserve empty strings instead of converting to None via 'or' operator
     # This is important for catchups where channel may legitimately be empty
@@ -805,7 +819,7 @@ def notify():
     if not action:
         error_msg = "Missing or empty 'action' field in webhook payload"
         logger.error(error_msg, f"payload={json.dumps(payload, default=str)[:300]}")
-        return jsonify({"ok": False, "error": error_msg}), 400
+        return JSONResponse({"ok": False, "error": error_msg}, status_code=400)
 
     meta = None
     used_api = False
@@ -829,21 +843,21 @@ def notify():
         if is_catchup:
             # For catch-ups: search by title, but pass start time to prefer the right airing
             # (there may be multiple airings/reruns of the same program)
-            meta = cache_find_program(None, title, start, prefer_past=True)
+            meta = await cache_find_program(None, title, start, prefer_past=True)
             logger.debug(f"Catchup EPG lookup by title with timestamp preference", f"title={title}, start={start}")
         else:
-            meta = cache_find_program(None, title, start, prefer_past=is_catchup)
+            meta = await cache_find_program(None, title, start, prefer_past=is_catchup)
     elif SNAPPY_API_ENABLED and (title or channel_hint or channel_clean):
-        meta, _ = api_find_program(channel=channel_hint, title=title, start=start)
+        meta, _ = await api_find_program(channel=channel_hint, title=title, start=start)
         used_api = bool(meta)
         if not meta and channel_clean and channel_clean != channel_hint:
-            alt_meta, _ = api_find_program(channel=channel_clean, title=title, start=start)
+            alt_meta, _ = await api_find_program(channel=channel_clean, title=title, start=start)
             if alt_meta:
                 meta = alt_meta
             used_api = used_api or bool(alt_meta)
     if not meta:
         # For fallback search: use timestamp for both catch-ups and recordings to find the right airing
-        meta = cache_find_program(channel_hint or channel_clean, title, start, prefer_past=is_catchup)
+        meta = await cache_find_program(channel_hint or channel_clean, title, start, prefer_past=is_catchup)
 
     # Debug: log EPG metadata found for catch-ups
     if is_catchup and meta:
@@ -953,6 +967,19 @@ def notify():
     desc_body = desc_raw
 
     duration_min = (payload or {}).get("duration_min")
+
+    # Calculate duration from start/end timestamps if not provided (common for catch-ups)
+    if not duration_min and start and end:
+        try:
+            start_dt = _parse_timestamp(start)
+            end_dt = _parse_timestamp(end)
+            if start_dt and end_dt:
+                duration_sec = (end_dt - start_dt).total_seconds()
+                if duration_sec > 0:
+                    duration_min = int(duration_sec / 60)
+        except Exception:
+            pass  # If calculation fails, leave duration_min as None
+
     filepath     = (payload or {}).get("file")
     error_msg    = (payload or {}).get("error")
     exit_code    = _as_int((payload or {}).get("exit_code"))
@@ -962,7 +989,7 @@ def notify():
     # suppress noise for *_exit with code==0
     if action.endswith("_exit"):
         if exit_code is None or exit_code == 0:
-            return jsonify({"ok": True, "suppressed": True, "reason": "exit_code==0", "action": action})
+            return JSONResponse({"ok": True, "suppressed": True, "reason": "exit_code==0", "action": action})
 
     DESC_LIMIT = int(os.environ.get("NOTIFY_DESC_LIMIT", "900"))
 
@@ -1094,7 +1121,7 @@ def notify():
 
     attachment_path = None
 
-    res = pushover_send(
+    res = await pushover_send(
         title=f"{push_title}",
         message=body,
         url=None,
@@ -1107,7 +1134,7 @@ def notify():
     # This should never happen due to validation above, but guards against edge cases
     response_action = action if action else "unknown"
 
-    return jsonify({
+    return JSONResponse({
         "ok": True,
         "pushover": res,
         "enriched": bool(meta),
@@ -1115,13 +1142,13 @@ def notify():
         "action": response_action
     })
 
-@app.route('/https-capabilities', methods=['GET'])
-def https_caps():
-    return jsonify({'hosts': _https_support})
+@app.get('/https-capabilities')
+async def https_caps():
+    return JSONResponse({'hosts': _https_support})
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({
+@app.get('/health')
+async def health():
+    return JSONResponse({
         'ok': True,
         'ts': time.time(),
         'api_enabled': SNAPPY_API_ENABLED,
@@ -1148,14 +1175,33 @@ def validate_pushover_config():
     logger.info("Pushover credentials configured", f"user={PO_USER[:4]}...{PO_USER[-4:] if len(PO_USER) > 8 else ''}")
     return True
 
-__ = _preflight_scan()
+@app.on_event("startup")
+async def startup_event():
+    """Run initialization tasks on application startup"""
+    # Validate configuration on startup
+    validate_pushover_config()
+
+    # Run preflight scan asynchronously
+    await _preflight_scan()
+    logger.debug("Preflight HTTPS scan completed")
+
+    # Log API configuration
+    if SNAPPY_API_ENABLED:
+        logger.info("Snappy API enabled", f"base={SNAPPY_API_BASE}, timeout={SNAPPY_API_TIMEOUT}s")
+    else:
+        logger.info("Snappy API disabled")
+
+    # Show final startup message
+    logger.info("Application startup complete.")
 
 if __name__ == '__main__':
-    logger.info("Starting webhook server", f"host=127.0.0.1, port=9080")
+    import uvicorn
+    host = os.environ.get('NOTIFICATION_HTTP_BIND', '0.0.0.0')
+    port = int(os.environ.get('NOTIFICATION_HTTP_PORT', '9080'))
 
-    # Validate configuration on startup
-    if not validate_pushover_config():
-        logger.warning("Webhook starting without Pushover - notifications will fail")
-
-    app.run(host=os.environ.get('NOTIFICATION_HTTP_BIND','127.0.0.1'),
-            port=int(os.environ.get('NOTIFICATION_HTTP_PORT','9080')))
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info"
+    )

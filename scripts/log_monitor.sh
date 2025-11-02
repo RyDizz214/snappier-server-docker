@@ -101,9 +101,9 @@ post_action() {
   while [[ $attempt -le $max_attempts ]]; do
     # Use -f to fail on HTTP errors, capture output and exit code
     # Increase timeout for movie/series/catchup actions (EPG/TMDB lookup takes time)
-    local timeout=12  # Default 12s (gunicorn worker timeout is 30s)
+    local timeout=12  # Default 12s (uvicorn timeout-keep-alive is 30s)
     if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* ]]; then
-      timeout=20  # Accommodate EPG/TMDB lookup + webhook processing, but avoid gunicorn timeout (30s)
+      timeout=20  # Accommodate EPG/TMDB lookup + webhook processing, but avoid uvicorn timeout (30s)
       max_attempts=2  # Reduce retries since timeout is higher
     fi
 
