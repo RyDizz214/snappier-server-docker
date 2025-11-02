@@ -682,50 +682,27 @@ remember_job(){
 delete_schedule_entry(){
   local job="$1"
   [[ -n "$job" ]] || return
-  python3 - "$job" <<'PY'
-import json, os, sys
-job = sys.argv[1]
-paths = []
-for candidate in (
-    os.environ.get("SCHEDULES_PATH"),
-    os.environ.get("SCHEDULES"),
-    "/root/SnappierServer/Recordings/schedules.json",
-    "/root/SnappierServer/schedules.json",
-):
-    if candidate and candidate not in paths:
-        paths.append(candidate)
 
-removed = False
-for path in paths:
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh) or {}
-    except FileNotFoundError:
-        print(f"[schedule_cleanup] Schedule file not found: {path}", file=sys.stderr)
-        continue
-    except Exception as e:
-        print(f"[schedule_cleanup] Error reading {path}: {e}", file=sys.stderr)
-        continue
+  # Use Snappier's DELETE API instead of direct file manipulation
+  # This properly invalidates the in-memory schedule cache
+  local api_base="${SNAPPY_API_BASE:-http://127.0.0.1:8000}"
+  local url="${api_base}/schedules/${job}"
 
-    if job not in data:
-        print(f"[schedule_cleanup] Job {job} not found in {path}", file=sys.stderr)
-        continue
+  log "Attempting to delete schedule via API: $url"
 
-    try:
-        del data[job]
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-        print(f"[schedule_cleanup] ✓ Successfully removed job {job} from {path}", file=sys.stderr)
-        removed = True
-    except Exception as e:
-        print(f"[schedule_cleanup] Error deleting from {path}: {e}", file=sys.stderr)
-        continue
+  # Call the DELETE endpoint
+  response=$(curl -fsS -X DELETE "$url" 2>&1)
+  exit_code=$?
 
-if removed:
-    print("removed")
-else:
-    print(f"[schedule_cleanup] WARNING: Job {job} was not found in any schedule file", file=sys.stderr)
-PY
+  if [[ $exit_code -eq 0 ]]; then
+    log "[schedule_cleanup] ✓ Successfully deleted job $job via API"
+    echo "removed"
+    return 0
+  else
+    log "[schedule_cleanup] ERROR: Failed to delete job $job via API (exit code: $exit_code)"
+    [[ -n "$response" ]] && log "[schedule_cleanup] Response: $response"
+    return 1
+  fi
 }
 
 set_job_status(){
