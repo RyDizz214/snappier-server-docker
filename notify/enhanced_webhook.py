@@ -970,8 +970,18 @@ async def notify(request: Request):
 
     kind = (payload or {}).get("type") or (meta or {}).get("type")
     year = (payload or {}).get("year") or (meta or {}).get("year")
-    desc_raw = (payload or {}).get("desc") or (meta or {}).get("desc") or (meta or {}).get("description")
+
+    # IMPORTANT: Preserve description from payload (schedule data) to avoid EPG enrichment picking wrong episode
+    # This is especially important for recordings where multiple episodes may have the same air time in EPG cache
+    payload_desc = (payload or {}).get("desc")
+    desc_raw = payload_desc or (meta or {}).get("desc") or (meta or {}).get("description")
     desc_body = desc_raw
+
+    # Debug: log description sources
+    logger.debug(
+        f"Description source for {action}",
+        f"payload_desc_present={bool(payload_desc)}, payload_desc={payload_desc[:50] if payload_desc else 'None'}, epg_desc_present={bool((meta or {}).get('desc') or (meta or {}).get('description'))}"
+    )
 
     # Debug: log what we got from EPG
     if is_catchup and meta:

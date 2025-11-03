@@ -940,6 +940,9 @@ while IFS= read -r line; do
     if [[ -n "$job_id_full" ]]; then
       if [[ -n "$desc" ]]; then
         JOB_DESC["$job_id_full"]="$desc"
+        log "DEBUG: Stored JOB_DESC[$job_id_full]='${desc:0:50}...'"
+      else
+        log "DEBUG: No description found for $job_id_full (S[description]='${S[description]:-}', S[desc]='${S[desc]:-}')"
       fi
       if [[ -n "$year" ]]; then
         JOB_YEAR["$job_id_full"]="$year"
@@ -1050,6 +1053,10 @@ while IFS= read -r line; do
             fi
             if [[ -n "$when_fmt" ]]; then
               live_args+=(scheduled_at "$when_fmt")
+            fi
+            # Include description if available (from JOB_DESC, which was populated from schedule earlier)
+            if [[ -n "${JOB_DESC[$job_id_full]:-}" ]]; then
+              live_args+=(desc "${JOB_DESC[$job_id_full]}")
             fi
             post_action "recording_live_started" "${live_args[@]}"
             set_job_status "$job_id_full" "recording_live_started"
@@ -1289,8 +1296,9 @@ while IFS= read -r line; do
         REMUX_SCHED["$k"]="$v"
       done < <(lookup_schedule "$uuid")
 
-      # Extract description from schedule
-      desc="${REMUX_SCHED[description]:-${REMUX_SCHED[desc]:-}}"
+      # Extract description from schedule (prefer stored JOB_DESC if available, as schedules.json may be cleared)
+      desc="${JOB_DESC[$uuid]:-${REMUX_SCHED[description]:-${REMUX_SCHED[desc]:-}}}"
+      log "DEBUG: recording_completed - JOB_DESC[$uuid]='${JOB_DESC[$uuid]:-}', REMUX_SCHED[description]='${REMUX_SCHED[description]:-}', final desc='${desc:0:50}...'"
 
       # Use filename timestamp if available (more reliable than schedule data)
       start_raw="${JOB_START_RAW[$uuid]:-${M[start]:-}}"
