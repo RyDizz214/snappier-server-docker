@@ -1,7 +1,7 @@
 ########################################
 # 1) Build Configuration
 ########################################
-ARG SNAPPIER_SERVER_VERSION=1.3.4a
+ARG SNAPPIER_SERVER_VERSION=1.3.4b
 ARG SNAPPIER_SERVER_ARCH=linux-x64
 ARG FFMPEG_VERSION=latest
 
