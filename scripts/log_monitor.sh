@@ -1047,6 +1047,16 @@ while IFS= read -r line; do
                 [[ -z "$when_fmt" ]] && when_fmt="$start_raw"
               fi
             fi
+
+            # Lookup schedule to get description for immediate recording notification
+            # This must be done here because JOB_DESC hasn't been populated yet
+            declare -A LIVE_SCHED=()
+            while IFS='=' read -r k v; do
+              [[ -z "$k" ]] && continue
+              LIVE_SCHED["$k"]="$v"
+            done < <(lookup_schedule "$job_id_full")
+            live_desc="${LIVE_SCHED[description]:-${LIVE_SCHED[desc]:-}}"
+
             declare -a live_args=(job_id "$job_id" job_id_full "$job_id_full" program "$program")
             if [[ -n "$channel" ]]; then
               live_args+=(channel "$channel")
@@ -1054,9 +1064,12 @@ while IFS= read -r line; do
             if [[ -n "$when_fmt" ]]; then
               live_args+=(scheduled_at "$when_fmt")
             fi
-            # Include description if available (from JOB_DESC, which was populated from schedule earlier)
-            if [[ -n "${JOB_DESC[$job_id_full]:-}" ]]; then
-              live_args+=(desc "${JOB_DESC[$job_id_full]}")
+            # Include description from schedule lookup (done above)
+            if [[ -n "$live_desc" ]]; then
+              live_args+=(desc "$live_desc")
+              log "DEBUG: recording_live_started will include desc='${live_desc:0:50}...'"
+            else
+              log "DEBUG: recording_live_started has no description (live_desc is empty)"
             fi
             post_action "recording_live_started" "${live_args[@]}"
             set_job_status "$job_id_full" "recording_live_started"
@@ -1298,7 +1311,12 @@ while IFS= read -r line; do
 
       # Extract description from schedule (prefer stored JOB_DESC if available, as schedules.json may be cleared)
       desc="${JOB_DESC[$uuid]:-${REMUX_SCHED[description]:-${REMUX_SCHED[desc]:-}}}"
-      log "DEBUG: recording_completed - JOB_DESC[$uuid]='${JOB_DESC[$uuid]:-}', REMUX_SCHED[description]='${REMUX_SCHED[description]:-}', final desc='${desc:0:50}...'"
+      log "DEBUG: $action - JOB_DESC[$uuid]='${JOB_DESC[$uuid]:-EMPTY}', REMUX_SCHED[description]='${REMUX_SCHED[description]:-EMPTY}', final desc='${desc:-EMPTY}'"
+      if [[ -n "$desc" ]]; then
+        log "DEBUG: $action will include desc='${desc:0:60}...'"
+      else
+        log "WARNING: $action has no description metadata (both JOB_DESC and REMUX_SCHED are empty)"
+      fi
 
       # Use filename timestamp if available (more reliable than schedule data)
       start_raw="${JOB_START_RAW[$uuid]:-${M[start]:-}}"
