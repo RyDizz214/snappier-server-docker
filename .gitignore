@@ -5,3 +5,8 @@ epg/
 schedules.json
 build.log
 __pycache__/
+
+# Bug reports and analysis documents (for reference/documentation only)
+*_BUG_REPORT.html
+*_ROOT_CAUSE_AND_FIX.html
+*_BUG_FIX_SUMMARY.html
