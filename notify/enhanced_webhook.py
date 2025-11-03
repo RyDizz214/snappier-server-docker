@@ -49,6 +49,44 @@ except ImportError:
     TMDB_AVAILABLE = False
     logger.warning("TMDB helper not available", "Movie/series metadata enrichment disabled")
 
+# Notification deduplication cache (TTL-based)
+# Prevents duplicate notifications from being processed within a 60-second window
+import hashlib
+_notification_cache = OrderedDict()  # Track recent notifications with timestamp
+NOTIFICATION_DEDUP_WINDOW = 60  # seconds
+
+def _check_and_record_notification(action, job_id_full, file_path):
+    """
+    Check if notification was recently sent, and record it if not.
+    Returns: (is_duplicate, time_since_last)
+    """
+    # Create dedup key from action + full job ID + file path
+    dedup_key = hashlib.md5(
+        f"{action}:{job_id_full}:{file_path}".encode()
+    ).hexdigest()
+
+    current_time = time.time()
+
+    # Check if we've seen this notification recently
+    if dedup_key in _notification_cache:
+        last_sent = _notification_cache[dedup_key]
+        elapsed = current_time - last_sent
+
+        if elapsed < NOTIFICATION_DEDUP_WINDOW:
+            return (True, elapsed)  # Is a duplicate
+
+        # Remove old entry if outside window
+        del _notification_cache[dedup_key]
+
+    # Record this notification
+    _notification_cache[dedup_key] = current_time
+
+    # Keep cache size bounded (remove oldest entries if > 1000)
+    while len(_notification_cache) > 1000:
+        _notification_cache.popitem(last=False)
+
+    return (False, 0)  # Not a duplicate
+
 app = FastAPI(title="Snappier Webhook", version="1.0")
 
 PO_USER  = os.environ.get('PUSHOVER_USER_KEY','')
@@ -820,6 +858,24 @@ async def notify(request: Request):
         error_msg = "Missing or empty 'action' field in webhook payload"
         logger.error(error_msg, f"payload={json.dumps(payload, default=str)[:300]}")
         return JSONResponse({"ok": False, "error": error_msg}, status_code=400)
+
+    # Extract job_id and file for deduplication check
+    job_id_full = (payload or {}).get("job_id_full") or (payload or {}).get("job_id") or ""
+    file_path = (payload or {}).get("file") or ""
+
+    # Check for duplicate notifications within TTL window
+    is_duplicate, elapsed = _check_and_record_notification(action, job_id_full, file_path)
+    if is_duplicate:
+        logger.warning(
+            f"Duplicate notification suppressed",
+            f"action={action}, job={job_id_full[:8] if job_id_full else 'unknown'}..., elapsed={elapsed:.1f}s"
+        )
+        return JSONResponse({
+            "ok": True,
+            "deduplicated": True,
+            "elapsed_since_last": f"{elapsed:.1f}s",
+            "action": action
+        })
 
     meta = None
     used_api = False

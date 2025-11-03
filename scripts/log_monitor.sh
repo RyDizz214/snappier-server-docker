@@ -100,9 +100,9 @@ post_action() {
 
   while [[ $attempt -le $max_attempts ]]; do
     # Use -f to fail on HTTP errors, capture output and exit code
-    # Increase timeout for movie/series/catchup actions (EPG/TMDB lookup takes time)
+    # Increase timeout for actions that do EPG/TMDB enrichment (metadata lookups take time)
     local timeout=12  # Default 12s (uvicorn timeout-keep-alive is 30s)
-    if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* ]]; then
+    if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* || "$action" == recording_completed ]]; then
       timeout=20  # Accommodate EPG/TMDB lookup + webhook processing, but avoid uvicorn timeout (30s)
       max_attempts=2  # Reduce retries since timeout is higher
     fi
@@ -313,11 +313,26 @@ elif len(parts) == 2 and re.fullmatch(r'[A-Za-z0-9-]{8,}', parts[1] or ''):
     uuid = parts[1]
 else:
     kind = 'recording'
-    channel = norm(parts[0]) if parts else ''
-    program = norm(parts[1]) if len(parts) > 1 else ''
-    start = parts[2] if len(parts) > 2 else ''
-    end = parts[3] if len(parts) > 3 else ''
-    uuid = parts[4] if len(parts) > 4 else ''
+    # Extract UUID using regex pattern (handles any number of -- separators in program title)
+    uuid_match = re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', name, re.IGNORECASE)
+    if uuid_match:
+        uuid = uuid_match.group(1)
+        # Remove UUID from name to parse other fields correctly
+        name_without_uuid = name.split('--' + uuid)[0]
+        recording_parts = name_without_uuid.split('--')
+        channel = norm(recording_parts[0]) if recording_parts else ''
+        program = norm(recording_parts[1]) if len(recording_parts) > 1 else ''
+        # After removing UUID, the last two remaining parts are start and end
+        remaining = [p for p in recording_parts[2:] if p]
+        start = remaining[-2] if len(remaining) > 1 else ''
+        end = remaining[-1] if len(remaining) > 0 else ''
+    else:
+        # Fallback to positional parsing if no UUID found
+        channel = norm(parts[0]) if parts else ''
+        program = norm(parts[1]) if len(parts) > 1 else ''
+        start = parts[2] if len(parts) > 2 else ''
+        end = parts[3] if len(parts) > 3 else ''
+        uuid = parts[4] if len(parts) > 4 else ''
 
 for key, value in (
     ('kind', kind),
@@ -1260,6 +1275,23 @@ while IFS= read -r line; do
 
     # Send notification with complete metadata
     if [[ -n "$uuid" ]]; then
+      # Check for duplicate notifications before sending
+      current_status="$(get_job_status "$uuid")"
+      if [[ "$current_status" == "$action" ]]; then
+        log "Skipping duplicate action '$action' for job $uuid (already completed)"
+        update_size; continue
+      fi
+
+      # Lookup schedule to get description metadata
+      declare -A REMUX_SCHED=()
+      while IFS='=' read -r k v; do
+        [[ -z "$k" ]] && continue
+        REMUX_SCHED["$k"]="$v"
+      done < <(lookup_schedule "$uuid")
+
+      # Extract description from schedule
+      desc="${REMUX_SCHED[description]:-${REMUX_SCHED[desc]:-}}"
+
       # Use filename timestamp if available (more reliable than schedule data)
       start_raw="${JOB_START_RAW[$uuid]:-${M[start]:-}}"
       if [[ "$kind" == "movie" ]]; then
@@ -1278,6 +1310,9 @@ while IFS= read -r line; do
       declare -a args=(job_id "$(shorten_job "$uuid")" job_id_full "$uuid" exit_code "$code" program "$program")
       if [[ "$kind" != "movie" && -n "$channel" ]]; then
         args+=(channel "$channel")
+      fi
+      if [[ -n "$desc" ]]; then
+        args+=(desc "$desc")
       fi
       if [[ "$kind" != "movie" && -n "$start_raw" ]]; then
         args+=(start "$start_raw")
