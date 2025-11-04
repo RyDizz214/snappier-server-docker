@@ -324,8 +324,18 @@ else:
         program = norm(recording_parts[1]) if len(recording_parts) > 1 else ''
         # After removing UUID, the last two remaining parts are start and end
         remaining = [p for p in recording_parts[2:] if p]
-        start = remaining[-2] if len(remaining) > 1 else ''
-        end = remaining[-1] if len(remaining) > 0 else ''
+        if len(remaining) >= 2:
+            # Both start and end timestamps present
+            start = remaining[-2]
+            end = remaining[-1]
+        elif len(remaining) == 1:
+            # Only one timestamp present - it's the START time (recordings in progress)
+            start = remaining[0]
+            end = ''
+        else:
+            # No timestamps
+            start = ''
+            end = ''
     else:
         # Fallback to positional parsing if no UUID found
         channel = norm(parts[0]) if parts else ''
