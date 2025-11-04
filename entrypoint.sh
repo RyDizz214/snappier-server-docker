@@ -329,6 +329,11 @@ fi
 
 # 4) Build args & launch
 build_args
+
+# Increase Node.js heap size to 8GB for EPG processing to prevent OOM crashes
+# when merging large EPG datasets from multiple sources
+export NODE_OPTIONS="--max-old-space-size=8192"
+
 log "Launching: ${SNAPPIER_BIN} ${ARGS[*]}"
 cd /opt/SnappierServer
 exec "${SNAPPIER_BIN}" "${ARGS[@]}"
