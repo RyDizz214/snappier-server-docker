@@ -1,12 +1,36 @@
-test/
+# Secrets / runtime
 .env
-logs/
-epg/
-schedules.json
-build.log
-__pycache__/
+*.pem
+*.key
 
-# Bug reports and analysis documents (for reference/documentation only)
+# Runtime state dirs (created by containers / scripts)
+data/
+gluetun/
+epg-merger/
+epg/
+logs/
+test/
+schedules.json
+
+# Build / local cache
+build.log
+**/__pycache__/
+*.pyc
+
+# Editor / tool state
+.claude/
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local backups / archived notes
+*.backup
+*.bak
+*_BUG_REPORT.md
 *_BUG_REPORT.html
 *_ROOT_CAUSE_AND_FIX.html
 *_BUG_FIX_SUMMARY.html
+FEATURE_REQUEST_*.md
+RELEASE_NOTES_*.md

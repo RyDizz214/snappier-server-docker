@@ -103,7 +103,7 @@ post_action() {
     # Increase timeout for actions that do EPG/TMDB enrichment (metadata lookups take time)
     local timeout=12  # Default 12s (uvicorn timeout-keep-alive is 30s)
     if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* || "$action" == recording_completed ]]; then
-      timeout=20  # Accommodate EPG/TMDB lookup + webhook processing, but avoid uvicorn timeout (30s)
+      timeout=45  # Accommodate Xtream cache refresh (~7s) + EPG cache reload (~18s) + enrichment
       max_attempts=2  # Reduce retries since timeout is higher
     fi
 
@@ -134,13 +134,30 @@ post_action() {
         attempt=$((attempt + 1))
       else
         log "ERROR: All $max_attempts attempts failed, giving up"
-        return 1
+        return 0  # non-fatal — don't crash log_monitor
       fi
     fi
   done
 }
 
 trim(){ sed 's/^[[:space:]]*//;s/[[:space:]]*$//' ; }
+
+# Append stream metadata (airtime, provider_domain, stream_id) to an args array
+# Usage: append_stream_meta args_name job_id
+append_stream_meta() {
+  local -n _arr="$1"
+  local _job="$2"
+  [[ -z "$_job" ]] && return 0
+  if [[ -n "${JOB_AIRTIME[$_job]:-}" ]]; then
+    _arr+=(airtime "${JOB_AIRTIME[$_job]}")
+  fi
+  if [[ -n "${JOB_PROVIDER[$_job]:-}" ]]; then
+    _arr+=(provider_domain "${JOB_PROVIDER[$_job]}")
+  fi
+  if [[ -n "${JOB_STREAM_ID[$_job]:-}" ]]; then
+    _arr+=(stream_id "${JOB_STREAM_ID[$_job]}")
+  fi
+}
 
 # ──────────────────────────────────────────────────────────────────────
 # Metadata derivation from TS filenames
@@ -684,6 +701,9 @@ declare -A JOB_END_LOCAL=()     # job_id -> formatted local end
 declare -A JOB_DESC=()          # job_id -> description/overview (if known)
 declare -A JOB_YEAR=()          # job_id -> release year for movies
 declare -A JOB_TYPE=()          # job_id -> content type/genre for movies
+declare -A JOB_AIRTIME=()       # job_id -> air time from timeshift URL (YYYY-MM-DD:HH-MM)
+declare -A JOB_PROVIDER=()      # job_id -> provider domain from timeshift URL
+declare -A JOB_STREAM_ID=()     # job_id -> stream ID from timeshift URL
 declare -A REMUX_EXIT_CODE=()   # ts_filename -> exit code from [remux] ffmpeg exited event
 
 PENDING_LIVE_PROGRAM=""
@@ -710,7 +730,8 @@ delete_schedule_entry(){
 
   # Use Snappier's DELETE API instead of direct file manipulation
   # This properly invalidates the in-memory schedule cache
-  local api_base="${SNAPPY_API_BASE:-http://127.0.0.1:8000}"
+  local api_base="${SNAPPY_API_BASE:-https://127.0.0.1:8000}"
+  local api_token="${SNAPPIER_API_TOKEN:-}"
   local url="${api_base}/schedules/${job}"
 
   log "Attempting to delete schedule via API: $url"
@@ -718,7 +739,9 @@ delete_schedule_entry(){
   # Call the DELETE endpoint and capture HTTP status code separately
   # Use -w to get status code without -f flag (which crashes on 4xx/5xx)
   local http_code response
-  response=$(curl -sS -X DELETE -w "\n%{http_code}" "$url" 2>&1)
+  local -a curl_opts=(-sS -k -X DELETE -w "\n%{http_code}")
+  [[ -n "$api_token" ]] && curl_opts+=(-H "x-api-token: $api_token")
+  response=$(curl "${curl_opts[@]}" "$url" 2>&1)
   local curl_exit=$?
 
   # Extract status code from last line
@@ -729,20 +752,20 @@ delete_schedule_entry(){
   if [[ $curl_exit -ne 0 ]]; then
     log "[schedule_cleanup] ERROR: Curl request failed for job $job (exit code: $curl_exit)"
     [[ -n "$response" ]] && log "[schedule_cleanup] Response: $response"
-    return 1
+    return 0  # non-fatal — don't crash log_monitor
   fi
 
   # Treat 200 (deleted) and 404 (not found) as success
   # 404 means the schedule doesn't exist - cleanup goal achieved either way
   if [[ "$http_code" == "200" ]] || [[ "$http_code" == "404" ]]; then
-    log "[schedule_cleanup] ✓ Successfully deleted job $job via API (HTTP $http_code)"
+    log "[schedule_cleanup] Successfully deleted job $job via API (HTTP $http_code)"
     echo "removed"
     return 0
   else
     # Actual error (5xx, timeout, etc)
-    log "[schedule_cleanup] ERROR: Failed to delete job $job via API (HTTP $http_code)"
+    log "[schedule_cleanup] WARN: Failed to delete job $job via API (HTTP $http_code)"
     [[ -n "$response" ]] && log "[schedule_cleanup] Response: $response"
-    return 1
+    return 0  # non-fatal — don't crash log_monitor
   fi
 }
 
@@ -787,8 +810,9 @@ while IFS= read -r line; do
     job="${BASH_REMATCH[1]}"; code="${BASH_REMATCH[2]}"
     kind="${JOB_KIND[$job]:-catchup}"
 
-    # If remux is enabled, skip notification here - remux completion will send it with the final .mkv file
-    if [[ "${ENABLE_REMUX:-0}" == "1" ]] || [[ "${ENABLE_REMUX:-0}" == "true" ]]; then
+    # If remux is enabled AND download succeeded, wait for remux completion to send notification
+    # If download failed (non-zero exit), send catchup_failed immediately — no remux will occur
+    if [[ "${ENABLE_REMUX:-0}" == "1" || "${ENABLE_REMUX:-0}" == "true" ]] && [[ "$code" == "0" ]]; then
       log "Catch-up download finished (job: $job), waiting for remux completion to send notification"
       update_size; continue
     fi
@@ -823,6 +847,7 @@ while IFS= read -r line; do
       if [[ -n "$start_local" ]]; then
         payload_args+=(start_local "$start_local")
       fi
+      append_stream_meta payload_args "$job"
       post_action "$action" "${payload_args[@]}"
       set_job_status "$job" "$action"
     else
@@ -853,7 +878,14 @@ while IFS= read -r line; do
       done < <(lookup_schedule "$uuid" "$file")
     fi
 
-    kind="${M[kind]:-recording}"
+    # Check if we already know the job type (e.g. [/SaveCatchup] seen before filename)
+    # The stored kind takes priority over filename-based detection, since newer server
+    # versions include channel prefixes in catch-up filenames which confuses parse_ts_meta
+    if [[ -n "$uuid" && -n "${JOB_KIND[$uuid]:-}" ]]; then
+      kind="${JOB_KIND[$uuid]}"
+    else
+      kind="${M[kind]:-recording}"
+    fi
     if [[ "$file" == */Movies/* ]]; then
       kind="movie"
     elif [[ "$file" == */TVSeries/* ]]; then
@@ -890,9 +922,13 @@ while IFS= read -r line; do
       channel="$(clean_channel "$channel")"
     fi
 
-    # Resolve start time with preference for schedule data on catch-ups (for accurate EPG lookup)
+    # Resolve start time:
+    # - Catch-ups: prefer filename download timestamp (M[start]) because providers often send
+    #   unreliable bare time strings (e.g. "4:00 PM" with no date/timezone). The download
+    #   timestamp is always close to the actual air time and has a full date+timezone.
+    # - Recordings: prefer filename timestamp (M[start]) as primary, schedule as fallback.
     if [[ "$kind" == "catchup" ]]; then
-      start_raw="$(resolve_timestamp "${S[start_time]:-}" "${M[start]:-}")"
+      start_raw="$(resolve_timestamp "${M[start]:-}" "${S[start_time]:-}")"
     else
       start_raw="$(resolve_timestamp "${M[start]:-}" "${S[start_time]:-}")"
     fi
@@ -1026,6 +1062,44 @@ while IFS= read -r line; do
     fi
     payload_args+=(file "$file")
 
+    # Extract provider domain and stream ID from the ffmpeg wrapper log.
+    # For catch-ups: timeshift URL has airtime + provider + stream_id
+    # For live recordings: live URL has provider + stream_id
+    # The stream_id resolves to an exact EPG channel via the Xtream API cache.
+    if [[ -n "$job_id_full" ]]; then
+      WRAPPER_LOG="${FFMPEG_WRAPPER_LOG:-/root/SnappierServer/logs/ffmpeg_wrapper.log}"
+      if [[ -f "$WRAPPER_LOG" ]]; then
+        # Search from end of file — the job UUID will be in recent lines
+        wrapper_line="$(tac "$WRAPPER_LOG" 2>/dev/null | grep -m1 "$job_id_full" || true)"
+        if [[ -n "$wrapper_line" ]]; then
+          # Extract provider domain from timeshift or live URL
+          provider_domain="$(echo "$wrapper_line" | grep -oP 'https?://\K[^/]+(?=/(timeshift|live)/)' | sed 's/:[0-9]*$//' || true)"
+          # Extract airtime from timeshift URL (catch-ups only)
+          airtime_raw="$(echo "$wrapper_line" | grep -oP '/timeshift/[^/]+/[^/]+/\d+/\K\d{4}-\d{2}-\d{2}:\d{2}-\d{2}' || true)"
+          # Extract stream_id — last numeric segment before .ts in the URL
+          # Timeshift: /timeshift/user/pass/dur/airtime/STREAM_ID.ts
+          # Live:      /live/user/pass/STREAM_ID.ts
+          stream_id="$(echo "$wrapper_line" | grep -oP '/(?:timeshift|live)/.*?/(\d+)\.ts' | grep -oP '/(\d+)\.ts$' | grep -oP '\d+' || true)"
+
+          if [[ -n "$airtime_raw" ]]; then
+            payload_args+=(airtime "$airtime_raw")
+            JOB_AIRTIME["$job_id_full"]="$airtime_raw"
+            log "Extracted timeshift info: airtime=$airtime_raw provider=$provider_domain stream_id=$stream_id (job: $job_id_full)"
+          elif [[ -n "$provider_domain" || -n "$stream_id" ]]; then
+            log "Extracted stream info: provider=$provider_domain stream_id=$stream_id (job: $job_id_full)"
+          fi
+          if [[ -n "$provider_domain" ]]; then
+            payload_args+=(provider_domain "$provider_domain")
+            JOB_PROVIDER["$job_id_full"]="$provider_domain"
+          fi
+          if [[ -n "$stream_id" ]]; then
+            payload_args+=(stream_id "$stream_id")
+            JOB_STREAM_ID["$job_id_full"]="$stream_id"
+          fi
+        fi
+      fi
+    fi
+
     if [[ "$action" == "recording_started" && -n "$job_id_full" ]]; then
       if [[ -z "${JOB_LIVE_SENT[$job_id_full]:-}" ]]; then
         now_epoch="$(date +%s)"
@@ -1081,6 +1155,7 @@ while IFS= read -r line; do
             else
               log "DEBUG: recording_live_started has no description (live_desc is empty)"
             fi
+            append_stream_meta live_args "$job_id_full"
             post_action "recording_live_started" "${live_args[@]}"
             set_job_status "$job_id_full" "recording_live_started"
             JOB_LIVE_SENT["$job_id_full"]=1
@@ -1204,6 +1279,7 @@ while IFS= read -r line; do
         JOB_SCHEDULED_AT["$uuid"]="$start_local"
       fi
       args+=(file "$final_file")
+      append_stream_meta args "$uuid"
       post_action "$action" "${args[@]}"
       set_job_status "$uuid" "$action"
     else
@@ -1357,6 +1433,7 @@ while IFS= read -r line; do
         args+=(start_local "$start_local")
       fi
       args+=(file "$final_file")
+      append_stream_meta args "$uuid"
       post_action "$action" "${args[@]}"
       set_job_status "$uuid" "$action"
     fi
@@ -1389,12 +1466,9 @@ while IFS= read -r line; do
     when_resolved="$(resolve_timestamp "$sched_raw" "${JOB_START_RAW[$job_uuid]:-${JOB_SCHEDULED_AT[$job_uuid]:-}}")"
     when_fmt="$(format_schedule_time "$when_resolved" "$sched_raw")"
       [[ -z "$when_fmt" ]] && when_fmt="$sched_raw"
-      post_action "recording_live_started" \
-        job_id "$(shorten_job "$job_uuid")" \
-        job_id_full "$job_uuid" \
-        program "$prog" \
-        channel "$chan" \
-        scheduled_at "$when_fmt"
+      declare -a imm_args=(job_id "$(shorten_job "$job_uuid")" job_id_full "$job_uuid" program "$prog" channel "$chan" scheduled_at "$when_fmt")
+      append_stream_meta imm_args "$job_uuid"
+      post_action "recording_live_started" "${imm_args[@]}"
       set_job_status "$job_uuid" "recording_live_started"
       PENDING_LIVE_PROGRAM=""
       PENDING_LIVE_CHANNEL=""
@@ -1535,12 +1609,15 @@ while IFS= read -r line; do
     update_size; continue
   fi
 
+  # Match movie exit events — old format: [SaveMovie] process closed for job ...: code=N, signal=S, filename=F, programme_name=P
+  #                          new format: [ScheduleMovie] ffmpeg exited for job ...: code=N, signal=S
   if [[ "$line" =~ \[/?SaveMovie\]\ process\ closed\ for\ job\ ([A-Za-z0-9-]+):\ code=([0-9-]+),\ signal=([^,]*),\ filename=([^,]+),\ programme_name=(.+)$ ]] || \
-     [[ "$line" =~ \[[^]]+\]\ \[/?SaveMovie\]\ process\ closed\ for\ job\ ([A-Za-z0-9-]+):\ code=([0-9-]+),\ signal=([^,]*),\ filename=([^,]+),\ programme_name=(.+)$ ]]; then
+     [[ "$line" =~ \[[^]]+\]\ \[/?SaveMovie\]\ process\ closed\ for\ job\ ([A-Za-z0-9-]+):\ code=([0-9-]+),\ signal=([^,]*),\ filename=([^,]+),\ programme_name=(.+)$ ]] || \
+     [[ "$line" =~ \[ScheduleMovie\]\ ffmpeg\ exited\ for\ job\ ([A-Za-z0-9-]+):\ code=([0-9-]+),\ signal=(.+)$ ]]; then
     job="${BASH_REMATCH[1]}"
     code="${BASH_REMATCH[2]}"
-    file="${BASH_REMATCH[4]}"
-    program_raw="${BASH_REMATCH[5]}"
+    file="${BASH_REMATCH[4]:-${JOB_FILE[$job]:-}}"
+    program_raw="${BASH_REMATCH[5]:-${JOB_PROGRAM[$job]:-}}"
     program="$(printf '%s' "$program_raw" | trim)"
 
     current_status="$(get_job_status "$job")"
@@ -1609,6 +1686,7 @@ while IFS= read -r line; do
       args+=(type "$movie_type")
     fi
     args+=(file "$file")
+    append_stream_meta args "$job"
 
     post_action "$action" "${args[@]}"
     set_job_status "$job" "$action"
@@ -1658,7 +1736,7 @@ while IFS= read -r line; do
     file=""
     if [[ -d "$SERIES_DIR" ]]; then
       # Look for files with this job ID (exclude metadata files)
-      found=$(find "$SERIES_DIR" -type f -name "*${job}*" ! -name "*.meta.json" 2>/dev/null | head -1)
+      found=$(find "$SERIES_DIR" -type f -name "*${job}*" ! -name "*.meta.json" 2>/dev/null | head -1 || true)
       if [[ -n "$found" ]]; then
         file="$found"
         log "Found series file: $file"
@@ -1685,6 +1763,7 @@ while IFS= read -r line; do
     if [[ "$code" != "0" ]]; then
       args+=(exit_code "$code")
     fi
+    append_stream_meta args "$job"
 
     post_action "$action" "${args[@]}"
     set_job_status "$job" "$action"

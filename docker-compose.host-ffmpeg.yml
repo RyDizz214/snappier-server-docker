@@ -1,0 +1,45 @@
+########################################
+# Snappier Server — Host FFmpeg Overlay (dev / x86-64 only)
+#
+# Mounts the HOST's ffmpeg/ffprobe binaries and shared libraries into the
+# container, bypassing the one built during `docker build`. Useful if:
+#   - You're iterating on ffmpeg flags without rebuilding the image
+#   - You have a GPU-accelerated or vendor-patched ffmpeg on the host
+#   - The host ffmpeg is newer than the one baked into the image
+#
+# NOT RECOMMENDED for most users. The published image includes a static
+# ffmpeg built from source with libx264/libx265/libfdk_aac/libvpx/libopus.
+#
+# LIMITATIONS:
+#   - x86-64 hosts only (the shim hardcodes ld-linux-x86-64.so.2).
+#   - Host glibc must be >= container's glibc; we work around by using the
+#     host's dynamic linker via /host-libs/lib.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.host-ffmpeg.yml up -d
+#
+# Combined with VPN:
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.vpn.yml \
+#                  -f docker-compose.host-ffmpeg.yml up -d
+########################################
+
+services:
+  snappier-server:
+    volumes:
+      # Host FFmpeg binaries and shared libraries
+      - /lib/x86_64-linux-gnu:/host-libs/lib:ro
+      - /usr/lib/x86_64-linux-gnu:/host-libs/usr-lib:ro
+      - /usr/lib/x86_64-linux-gnu/pulseaudio:/host-libs/pulseaudio:ro
+      - /usr/lib/x86_64-linux-gnu/blas:/host-libs/blas:ro
+      - /usr/lib/x86_64-linux-gnu/lapack:/host-libs/lapack:ro
+      - /usr/bin/ffmpeg:/host-bin/ffmpeg:ro
+      - /usr/bin/ffprobe:/host-bin/ffprobe:ro
+      # Wrapper shims (override the baked-in ffmpeg wrapper)
+      - ./ffmpeg-wrapper.sh:/usr/local/bin/ffmpeg:ro
+      - ./ffprobe-wrapper.sh:/usr/local/bin/ffprobe:ro
+      - ./ffmpeg-host-shim.sh:/usr/local/bin/ffmpeg.real:ro
+    environment:
+      # Point wrapper at the host shim instead of the built-in binary
+      FFMPEG_REAL: "/usr/local/bin/ffmpeg.real"
+      FFPROBE_REAL: "/host-bin/ffprobe"

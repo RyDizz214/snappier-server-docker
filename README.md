@@ -1,296 +1,261 @@
-# Snappier Server Docker Image
+# Snappier Server — Docker
 
-[![Docker Image](https://ghcr.io/rydizz214/snappier-server-docker/badge)](https://ghcr.io/rydizz214/snappier-server-docker)
-
-A production-ready Docker image bundling **Snappier Server CLI** with a **hardened FFmpeg toolchain** and **enhanced notification pipeline** that intelligently enriches recording events with EPG metadata and forwards structured alerts to Pushover.
-
-**Current Version**: `1.3.4a` | **FFmpeg**: Latest | **Architecture**: x64 Linux
-
----
-
-## ✨ Key Features
-
-### Core Recording & Streaming
-- **Snappier Server CLI** – IPTV recording, scheduled downloads, catch-up support
-- **Real-time EPG (Electronic Program Guide)** – Browse and search current/upcoming programs
-- **PVR (Personal Video Recorder)** – Automatic recording rules, series tracking, episode exclusions
-- **Statically-linked FFmpeg** – x264, x265, libvpx, fdk-aac, opus, freetype, fontconfig
-- **FFmpeg wrapper** – Automatic HTTP→HTTPS upgrade, network resilience, smart reconnection
-- **Catch-up buffer extension** – Automatic 3-minute buffer extension on catch-up downloads to ensure endings don't get cut off
-- **Network resilience** – Automatic reconnection with exponential backoff for stream interruptions
-
-### Notifications & Monitoring
-- **Intelligent webhook system** – Parses Snappier logs, enriches with EPG metadata, sends to Pushover
-- **Structured logging** – Log levels (DEBUG, INFO, WARNING, ERROR) with ISO 8601 timestamps
-- **Pushover retry logic** – Exponential backoff (2s → 4s → 8s) ensures no lost notifications
-- **Health monitoring** – Background health checker with configurable alert thresholds
-- **Request timeouts** – 5-second timeouts on file operations prevent handler hangs
-
-### User Experience
-- **Clean channel names** – Strips IPTV provider prefixes (US, CA, UK, etc.) and region suffixes
-- **Shortened job IDs** – Full UUID preserved, but display uses first 8 characters
-- **Human-friendly timestamps** – Auto-localized to container's `TZ` variable
-- **EPG enrichment** – Programs matched by title/timestamp with scoring algorithm
-- **TMDB integration** – Optional movie/series metadata enrichment with ratings
+A ready-to-run Docker setup for [Snappier Server](https://snappierserver.app),
+an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
+Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
+required.
 
 ---
 
-## Quick Start
+## Install (5 minutes)
 
-### Prerequisites
-- **Docker** 24.0+
-- **Docker Compose** 2.0+ (optional, but recommended)
-- **Pushover credentials** (user key + app token)
+### 1. Install Docker on your Linux host
 
-### 1. Clone Repository
+If you don't already have it: <https://docs.docker.com/engine/install/>
+
+Docker Compose v2 is included with modern Docker installs.
+
+### 2. Get the files
+
 ```bash
 git clone https://github.com/rydizz214/snappier-server-docker.git
 cd snappier-server-docker
-```
-
-### 2. Configure Environment
-```bash
-# Copy example configuration
 cp example.env .env
-
-# Edit with your credentials
-nano .env
 ```
 
-**Required variables**:
-```bash
-PUSHOVER_USER_KEY=<your-user-key>
-PUSHOVER_APP_TOKEN=<your-app-token>
-```
+### 3. Start it
 
-### 3. Start Container
 ```bash
-# Using Docker Compose (recommended)
+docker compose pull
 docker compose up -d
-
-# Or with Docker directly
-docker run -d \
-  --name snappier-server \
-  -p 7429:8000 \
-  -p 9080:9080 \
-  -e PUSHOVER_USER_KEY="your-key" \
-  -e PUSHOVER_APP_TOKEN="your-token" \
-  -e TZ="America/New_York" \
-  -v snappier-data:/root/SnappierServer \
-  ghcr.io/rydizz214/snappier-server-docker:1.3.4a
 ```
 
-### 4. Verify Health
-```bash
-# Check webhook is running
-curl http://localhost:9080/health | jq .
+That's it. Your recordings will be saved to a new `data/` folder right next
+to `docker-compose.yml`.
 
-# View logs
-docker compose logs -f snappier-server
+---
+
+## Open the Web UI
+
+On the **same machine** running Docker:
+
+- Go to **<http://localhost:7429>** in a browser.
+
+From a **different machine** (phone, laptop, another server):
+
+The web UI isn't exposed to your network by default, for security. You have
+two options:
+
+- **Easy:** SSH into the Docker host and use `localhost:7429` there.
+- **Better:** Put a reverse proxy (Nginx, Caddy, Cloudflare Tunnel) in front
+  of the container and point it at `127.0.0.1:7429`.
+
+---
+
+## Find your API token
+
+Snappier creates an API token the first time it starts. The easiest place to
+see it is in the container's logs:
+
+```bash
+docker logs snappier-server | grep -i token
+```
+
+(It's also stored in `data/config.json`, and visible in the Web UI's
+**Dashboard → Settings** once you can reach the UI.)
+
+---
+
+## What you get out of the box
+
+Everything below is already in the image — no extra setup needed:
+
+- **FFmpeg** (built from the latest source with x264/x265/fdk-aac/vpx/opus).
+  **You do NOT need to install FFmpeg on the host** — it's inside the
+  container.
+- **Recording optimisations:** smart HLS playback, catch-up (timeshift)
+  extension, automatic retry if a remux fails.
+- **Notifications:** a webhook that fires on every recording event. Plug in
+  Pushover keys to get push notifications on your phone (see below).
+- **Background helpers** that keep metadata tidy, monitor health, and cache
+  provider data.
+
+---
+
+## Common things you'll want to set
+
+Edit `.env` and uncomment / fill in these:
+
+| If you want…                          | Set this in `.env`                                          |
+|---------------------------------------|-------------------------------------------------------------|
+| Your own timezone                     | `TZ=America/New_York` *(or any IANA zone)*                  |
+| A different web port                  | `HOST_PORT=8080` *(default is 7429)*                        |
+| Your IPTV provider's EPG (TV guide)   | `EPG_URLS_JSON=[{...}]` *(see comments in example.env)*     |
+| Push notifications on your phone      | `PUSHOVER_USER_KEY=…` and `PUSHOVER_APP_TOKEN=…`            |
+| Posters & descriptions in notifications | `TMDB_API_KEY=…` *(free key from themoviedb.org; enriches notification messages only — Snappier still records fine without it)* |
+
+After any change to `.env`, restart:
+
+```bash
+docker compose up -d
 ```
 
 ---
 
-## Configuration Reference
+## Add a VPN (optional)
 
-### Core Settings
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TZ` | `America/New_York` | Container timezone (affects timestamps in logs and notifications) |
-| `PORT` | `8000` | Snappier Server listen port (inside container) |
-| `HOST_PORT` | `7429` | Host port mapping for Snappier Server |
+If you want all IPTV traffic routed through a VPN, Snappier supports 40+ VPN
+providers via [gluetun](https://github.com/qdm12/gluetun) (NordVPN, Mullvad,
+ProtonVPN, PIA, Surfshark, AirVPN, and more).
 
-### Notification Settings
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PUSHOVER_USER_KEY` | _(required)_ | Your Pushover user key (32-char alphanumeric) |
-| `PUSHOVER_APP_TOKEN` | _(required)_ | Your Pushover app token (32-char alphanumeric) |
-| `NOTIFICATION_HTTP_PORT` | `9080` | Webhook port (not exposed externally by default) |
-| `NOTIFY_TITLE_PREFIX` | `🎬 Snappier` | Prefix for all notification titles |
-| `NOTIFY_DESC_LIMIT` | `900` | Max description length in characters |
+1. Add your VPN settings to `.env`. Example for Mullvad over WireGuard:
 
-### Reliability & Retry Logic
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NOTIFY_RETRY_ATTEMPTS` | `3` | Number of Pushover API retry attempts |
-| `NOTIFY_RETRY_DELAY` | `2` | Initial retry delay in seconds (exponential backoff) |
-| `WEBHOOK_LOG_LEVEL` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `HTTPS_PROBE_TIMEOUT` | `3` | Timeout for HTTPS capability probe (seconds) |
+   ```env
+   VPN_SERVICE_PROVIDER=mullvad
+   VPN_TYPE=wireguard
+   WIREGUARD_PRIVATE_KEY=<paste-your-key>
+   SERVER_COUNTRIES=Sweden
+   ```
 
-### HTTP/HTTPS Upgrade
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ALLOW_HTTP` | `0` | Allow insecure HTTP streams (1=yes, 0=no) |
-| `ALLOW_HTTP_HOSTS` | `localhost,127.0.0.1,snappier-server` | Comma-separated hosts allowed to use HTTP |
+   The exact variable names for your provider are in the
+   [gluetun wiki](https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers).
 
-### Catch-up Downloads
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CATCHUP_EXTENSION_ENABLED` | `1` | Enable duration extension (1=yes, 0=no) |
-| `CATCHUP_BUFFER_SECONDS` | `180` | Buffer duration in seconds (default 3 minutes) |
-| `CATCHUP_AUDIO_BITRATE` | `384k` | Audio bitrate for transcoding (e.g., 192k, 256k, 384k) |
+2. Start with the VPN turned on:
 
-### EPG & API
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SNAPPY_API_ENABLED` | `1` | Enable Snappier API for EPG enrichment |
-| `SNAPPY_API_BASE` | `http://127.0.0.1:8000` | Snappier Server REST endpoint |
-| `SNAPPY_API_TIMEOUT` | `5` | API request timeout (seconds) |
-| `EPG_CACHE` | `/root/SnappierServer/epg/epg_cache.json` | EPG cache file location |
-| `EPG_INDEX_MAX_SIZE` | `50000` | Max EPG index entries before LRU eviction |
-
-See `example.env` for complete configuration options.
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+   ```
 
 ---
 
-## Building Locally
+## Where are my files?
 
-### Build with Defaults
-```bash
-docker build -t ghcr.io/rydizz214/snappier-server-docker:1.3.4a .
+Everything lives under `data/` beside `docker-compose.yml`:
+
+```
+data/
+├── Recordings/     # Scheduled + live recordings
+├── Movies/         # VOD movies
+├── TVSeries/       # VOD series
+├── PVR/            # Timer / PVR state
+├── epg/            # Cached TV guide data
+├── logs/           # All server + wrapper logs
+└── config.json     # Snappier's own config (includes your API token)
 ```
 
-### Build with Custom FFmpeg Version
-```bash
-docker build \
-  --build-arg FFMPEG_VERSION=7.1.1 \
-  -t ghcr.io/rydizz214/snappier-server-docker:1.3.4a .
-```
+Want them somewhere else? Set `DATA_DIR=/some/other/path` in `.env`.
 
-**Build time**: ~30-45 minutes (FFmpeg compilation)
+---
+
+## Basic commands cheat sheet
+
+```bash
+docker compose up -d           # start (detached)
+docker compose down            # stop and remove containers
+docker compose pull            # download the latest image
+docker compose restart         # quick restart
+docker compose logs -f         # follow the logs
+docker logs -f snappier-server # just the Snappier container's logs
+```
 
 ---
 
 ## Troubleshooting
 
-### Notifications Not Sending
-1. **Check credentials**:
-   ```bash
-   docker compose logs snappier-server | grep -i "pushover"
-   ```
+<details>
+<summary>I can't reach http://localhost:7429 from another device</summary>
 
-2. **Test webhook manually**:
-   ```bash
-   curl -X POST http://localhost:9080/notify \
-     -H 'Content-Type: application/json' \
-     -d '{"action":"health_warn","desc":"Test alert"}'
-   ```
+The port is locked to `127.0.0.1` (localhost only) for security. Either:
 
-### Container Won't Start
-1. **Check logs**:
-   ```bash
-   docker compose logs snappier-server
-   ```
+- Use a reverse proxy (Nginx, Caddy, Cloudflare Tunnel) — recommended, gives
+  you HTTPS too.
+- Or edit `docker-compose.yml` and change `"127.0.0.1:${HOST_PORT:-7429}:8000"`
+  to just `"${HOST_PORT:-7429}:8000"` to expose on all interfaces. **Only do
+  this on a trusted network** — Snappier's built-in TLS is off by default.
 
-2. **Verify volumes**:
-   ```bash
-   docker compose exec snappier-server ls -la /root/SnappierServer
-   ```
+</details>
 
-### Missing Channel/Program Metadata
-1. **Verify EPG cache**:
-   ```bash
-   docker compose exec snappier-server \
-     ls -lh /root/SnappierServer/epg/epg_cache.json
-   ```
+<details>
+<summary>Where's my API token?</summary>
 
-2. **Check API connectivity**:
-   ```bash
-   docker compose exec snappier-server \
-     curl http://127.0.0.1:8000/epg/status
-   ```
+Quickest:
 
----
-
-## Notification Events
-
-All notifications follow a consistent format with structured JSON payloads:
-
-### Recording Events
-- **recording_started** – Scheduled recording began
-- **recording_live_started** – "Record now" request (🔴 icon)
-- **recording_completed** – Recording finished successfully
-- **recording_failed** – Recording failed
-- **recording_cancelled** – Recording manually cancelled
-
-### Catch-up Events
-- **catchup_started** – Catch-up download initiated
-- **catchup_completed** – Catch-up finished
-- **catchup_failed** – Catch-up failed
-
-### Movie & Series
-- **movie_started** / **movie_completed** / **movie_failed**
-- **series_started** / **series_completed** / **series_failed**
-- Includes TMDB enrichment (ratings, genres, descriptions) if available
-
-### System Events
-- **health_warn** – Health check failed
-- **server_error** – General server error
-- **server_failed** – Critical server failure
-
----
-
-## Support & Issue Reporting
-
-### Issues with Snappier Server Itself
-For problems with recording, EPG, PVR, or the Snappier Server CLI:
-- **Join**: [Snappier Discord Channel](https://discord.gg/KSdU5VrHgM)
-- Include Snappier Server version, logs, and detailed reproduction steps
-- **Note**: Visit [snappierserver.app](https://snappierserver.app) for complete Snappier Server documentation
-
-### Issues with Docker Image & Notifications
-For Docker-specific issues, notification failures, webhook enrichment problems, or build issues:
-- **Open GitHub Issue**: [snappier-server-docker/issues](https://github.com/rydizz214/snappier-server-docker/issues)
-- Include Docker logs, sanitized configuration, `docker --version`, and reproduction steps
-
-### Pull Requests
-- Welcome! Please include test results and update CHANGELOG.md
-- See [DEVELOPER.md](DEVELOPER.md) for architecture and development guide
-
----
-
-## File Structure
-
-```
-snappier-server-docker/
-├── Dockerfile                          # Multi-stage build: FFmpeg + Runtime
-├── docker-compose.yml                  # Reference compose file
-├── entrypoint.sh                       # Boot sequence
-├── ffmpeg-wrapper.sh                   # HTTP→HTTPS upgrade + resilience
-├── example.env                         # Configuration template
-├── README.md                           # This file
-├── DEVELOPER.md                        # Architecture and development guide
-├── RELEASE_NOTES_v1.3.4a.md            # v1.3.4a release notes
-├── CHANGELOG.md                        # Full version history
-├── notify/
-│   ├── enhanced_webhook.py             # Flask webhook with EPG enrichment
-│   └── tmdb_helper.py                  # Optional TMDB metadata
-└── scripts/
-    ├── log_monitor.sh                  # Log tailer & event parser
-    ├── health_watcher.py               # Health check monitor
-    ├── schedule_watcher.py             # Recording schedule watcher
-    ├── log_rotate.sh                   # Log rotation & cleanup
-    └── timestamp_helpers.py            # Shared timestamp utilities
+```bash
+docker logs snappier-server | grep -i token
 ```
 
+Also visible in `data/config.json` and the Web UI's **Dashboard → Settings**.
+
+</details>
+
+<details>
+<summary>Something broke — how do I reset?</summary>
+
+```bash
+docker compose down
+docker compose pull
+docker compose up -d
+```
+
+If you want to nuke the data too, delete the `data/` folder. **This wipes
+your recordings** — don't do it unless you mean it.
+
+</details>
+
 ---
 
-## Acknowledgments
+## Advanced
 
-- **Snappier Server** – Core recording, PVR, and EPG functionality
-- **FFmpeg** community – Video encoding/transcoding
-- **Pushover** – Notification delivery service
-- Contributors to this Docker wrapper and notification pipeline
+<details>
+<summary>Build the image yourself instead of pulling from GHCR</summary>
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The Dockerfile handles both `amd64` and `arm64` automatically via Docker's
+`TARGETARCH`. The FFmpeg build stage pulls the latest upstream stable release
+at build time.
+
+</details>
+
+<details>
+<summary>Use your host's FFmpeg instead of the built-in one</summary>
+
+The built-in FFmpeg is fully featured and works on both Intel and ARM. Only
+override it if you need hardware acceleration (NVENC, QuickSync) or a
+vendor-patched FFmpeg. **x86-64 hosts only.**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host-ffmpeg.yml up -d
+```
+
+</details>
+
+<details>
+<summary>Turn on VPN + host FFmpeg at the same time</summary>
+
+```env
+# in .env
+COMPOSE_FILE=docker-compose.yml:docker-compose.vpn.yml:docker-compose.host-ffmpeg.yml
+```
+
+Then just `docker compose up -d`.
+
+</details>
+
+<details>
+<summary>Full variable reference</summary>
+
+See [`example.env`](example.env) — every supported variable is documented
+inline.
+
+</details>
 
 ---
 
 ## License
 
-MIT License – See [LICENSE](LICENSE) for details.
-
----
-
-**Happy recording! 🎬**
-
-For questions about Snappier Server features, join the [Snappier Discord](https://discord.gg/KSdU5VrHgM). For Docker or notification issues, open a [GitHub Issue](https://github.com/rydizz214/snappier-server-docker/issues).
-
+See upstream Snappier Server licensing at <https://snappierserver.app>. This
+repository contains only the Docker packaging, wrappers, and helper scripts.

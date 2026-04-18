@@ -1,25 +1,30 @@
 ########################################
-# 1) Build Configuration
+# Unified Snappier Server Dockerfile
+#
+# Build modes:
+#   USE_HOST_FFMPEG=false (default) - builds FFmpeg from source (publishable image)
+#   USE_HOST_FFMPEG=true            - skips FFmpeg build (local dev, host-mounted)
+#
+# Multi-arch: uses TARGETARCH from buildx (amd64|arm64) to fetch matching Snappier CLI.
+#
+# Examples:
+#   docker compose build                                    # built-in ffmpeg, native arch
+#   docker compose build --build-arg USE_HOST_FFMPEG=true   # host ffmpeg (x86-64 only)
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     --push -t ghcr.io/<you>/snappier-server:1.5.0 .       # multi-arch publish
 ########################################
-ARG SNAPPIER_SERVER_VERSION=1.3.4b
-ARG SNAPPIER_SERVER_ARCH=linux-x64
-ARG FFMPEG_VERSION=latest
+
+ARG SNAPPIER_SERVER_VERSION=1.5.0
+ARG USE_HOST_FFMPEG=false
 
 ########################################
-# Stage 0: Base - FFmpeg + Node.js + jq
-########################################
-FROM ubuntu:25.04 AS base
-ARG TARGETARCH
-ARG SNAPPIER_SERVER_VERSION=1.3.4a
-ARG TZ="America/New_York"
-
-# ----------------------------------------------------------------------------
 # Stage 1: Build FFmpeg and codec libraries from source
-# ----------------------------------------------------------------------------
+# (BuildKit skips this entirely when USE_HOST_FFMPEG=true)
+########################################
 FROM ubuntu:25.04 AS ffmpeg-build
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG FFMPEG_VERSION
+ARG FFMPEG_VERSION=latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates wget unzip xz-utils grep coreutils \
@@ -78,13 +83,20 @@ RUN git clone --depth=1 https://github.com/xiph/opus.git /tmp/opus \
  && ./configure --prefix=/usr/local --disable-shared \
  && make -j"$(nproc)" && make install
 
-# FFmpeg (latest stable or overridden via FFMPEG_VERSION)
+# FFmpeg (latest stable by default; override via FFMPEG_VERSION=8.1 etc.)
+#
+# FFMPEG_REFRESH is a cache-bust token. When FFMPEG_VERSION=latest, set this to
+# the current date (e.g. in CI: --build-arg FFMPEG_REFRESH=$(date +%Y%m%d)) so
+# Docker re-resolves the latest tarball instead of reusing a stale cached layer.
+ARG FFMPEG_REFRESH=1
 RUN set -eux; \
+  echo "FFMPEG_REFRESH=${FFMPEG_REFRESH} FFMPEG_VERSION=${FFMPEG_VERSION}"; \
   if [ "${FFMPEG_VERSION}" = "latest" ]; then \
-    FFMPEG_TARBALL="$(curl -fsSL https://ffmpeg.org/releases/ | grep -Eo 'ffmpeg-[0-9]+\.[0-9]+(\.[0-9]+)?\.tar\.xz' | grep -vE 'rc|git' | sort -V | tail -1)"; \
+    FFMPEG_TARBALL="$(curl -fsSL https://ffmpeg.org/releases/ | grep -Eo 'ffmpeg-[0-9]+\.[0-9]+(\.[0-9]+)?\.tar\.xz' | grep -vE 'rc|git' | sort -V | uniq | tail -1)"; \
   else \
     FFMPEG_TARBALL="ffmpeg-${FFMPEG_VERSION}.tar.xz"; \
   fi; \
+  if [ -z "${FFMPEG_TARBALL}" ]; then echo "Failed to resolve FFmpeg tarball" >&2; exit 1; fi; \
   echo "Selected FFmpeg: ${FFMPEG_TARBALL}"; \
   curl -fsSLo "/tmp/${FFMPEG_TARBALL}" "https://ffmpeg.org/releases/${FFMPEG_TARBALL}"; \
   mkdir -p /tmp/ffmpeg && tar -xf "/tmp/${FFMPEG_TARBALL}" -C /tmp/ffmpeg --strip-components=1; \
@@ -104,20 +116,17 @@ RUN set -eux; \
     --disable-debug --disable-doc; \
   make -j"$(nproc)" && make install && hash -r
 
-# ----------------------------------------------------------------------------
-# Stage 2: Runtime image
-# ----------------------------------------------------------------------------
-FROM ubuntu:25.04
+########################################
+# Stage 2: Common runtime base
+########################################
+FROM ubuntu:25.04 AS runtime-base
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG SNAPPIER_SERVER_VERSION
-ARG SNAPPIER_SERVER_ARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
-    nodejs npm \
-    curl jq ca-certificates tzdata tini dumb-init procps iproute2 inotify-tools coreutils \
-    unzip tar xz-utils \
+    curl jq ca-certificates tzdata tini procps inotify-tools iproute2 coreutils \
+    unzip \
     libssl3 \
     libxcb1 libxcb-shm0 libxcb-shape0 libxcb-xfixes0 \
     libx11-6 libxext6 libxrender1 libxfixes3 libxi6 libxrandr2 \
@@ -126,79 +135,91 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
-# Configure system timezone to match TZ environment variable
-# This ensures applications that read /etc/localtime get the correct timezone
-RUN ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
- && echo "America/New_York" > /etc/timezone
+# Timezone is set at runtime by entrypoint.sh from the TZ env var — no default baked in.
 
-# Bring FFmpeg toolchain from build stage
+########################################
+# Stage 3a: Built-in FFmpeg (published image)
+########################################
+FROM runtime-base AS runtime-false
+
 COPY --from=ffmpeg-build /usr/local /usr/local
+RUN mv /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg.real \
+ && ln -sf /usr/local/bin/ffmpeg.real /usr/bin/ffmpeg.real \
+ && ln -sf /usr/local/bin/ffprobe /usr/bin/ffprobe
 
-# Python dependencies used by helper scripts
-RUN python3 -m pip install --no-cache-dir --break-system-packages fastapi uvicorn[standard] httpx aiofiles requests watchdog
+########################################
+# Stage 3b: Host FFmpeg (local dev)
+########################################
+FROM runtime-base AS runtime-true
+
+RUN mkdir -p /usr/local/bin \
+ && ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg \
+ && ln -sf /usr/local/bin/ffprobe /usr/bin/ffprobe
+
+########################################
+# Stage 4: Final image
+########################################
+FROM runtime-${USE_HOST_FFMPEG} AS final
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG SNAPPIER_SERVER_VERSION
+ARG TARGETARCH
+
+# Map Docker's TARGETARCH (amd64/arm64) to Snappier's artifact arch (linux-x64/linux-arm64).
+# Allows `docker buildx build --platform linux/amd64,linux/arm64` to fetch the right CLI.
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) echo "linux-x64" > /tmp/snappier_arch ;; \
+      arm64) echo "linux-arm64" > /tmp/snappier_arch ;; \
+      *) echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac
+
+# Python dependencies for webhook and helper scripts
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    fastapi uvicorn[standard] httpx aiofiles requests watchdog
 
 WORKDIR /opt
-RUN mkdir -p /logs /root/SnappierServer/epg /root/SnappierServer
+RUN mkdir -p /logs /root/SnappierServer/epg /root/SnappierServer /opt/certs
 
-# Download Snappier CLI artifact
+# Download Snappier CLI artifact (per-arch via buildx TARGETARCH)
 RUN set -eux; \
-  APP_URL="https://snappierserver.app/betaFiles/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_SERVER_ARCH}.zip"; \
+  SNAPPIER_ARCH="$(cat /tmp/snappier_arch)"; \
+  APP_URL="https://snappierserver.app/files/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}.zip"; \
   echo "Downloading SnappierServer from: ${APP_URL}"; \
   curl -fsSL -o /tmp/snappier.zip "${APP_URL}"; \
   mkdir -p /opt/SnappierServer; \
   unzip -q /tmp/snappier.zip -d /opt/SnappierServer; \
   rm -f /tmp/snappier.zip; \
   find /opt/SnappierServer -maxdepth 2 -type f \( -name "*.sh" -o -name "snappier*" -o -name "*.bin" \) -exec chmod +x {} + || true; \
-  if [ -f "/opt/SnappierServer/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_SERVER_ARCH}" ]; then \
-    ln -sf "snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_SERVER_ARCH}" /opt/SnappierServer/snappier-server-cli; \
+  if [ -f "/opt/SnappierServer/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}" ]; then \
+    ln -sf "snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}" /opt/SnappierServer/snappier-server-cli; \
   fi; \
-  if [ -f /opt/SnappierServer/package.json ]; then (cd /opt/SnappierServer && (npm ci || npm install)); fi; \
-  if [ -f /opt/SnappierServer/requirements.txt ]; then python3 -m pip install --no-cache-dir --break-system-packages -r /opt/SnappierServer/requirements.txt; fi; \
-  ln -sf /opt/SnappierServer /root/SnappierServer
-
-ENV SNAPPIER_ARTIFACT_URL="https://snappierserver.app/betaFiles/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_SERVER_ARCH}.zip" \
-    SNAPPIER_ARTIFACT_FILE="snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_SERVER_ARCH}.zip"
-
-RUN echo "artifact_url=${SNAPPIER_ARTIFACT_URL}" > /opt/SnappierServer/.artifact_info \
- && echo "artifact_file=${SNAPPIER_ARTIFACT_FILE}" >> /opt/SnappierServer/.artifact_info \
- && echo "version=${SNAPPIER_SERVER_VERSION}" >> /opt/SnappierServer/.artifact_info \
- && echo "arch=${SNAPPIER_SERVER_ARCH}" >> /opt/SnappierServer/.artifact_info \
- && echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /opt/SnappierServer/.artifact_info
+  ln -sf /opt/SnappierServer /root/SnappierServer; \
+  echo '{}' > /opt/SnappierServer/config.json; \
+  { \
+    echo "version=${SNAPPIER_SERVER_VERSION}"; \
+    echo "arch=${SNAPPIER_ARCH}"; \
+    echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+  } > /opt/SnappierServer/.artifact_info
 
 # Notification webhook + helper scripts
-COPY notify/ /opt/notify/
-COPY scripts/ /opt/scripts/
-RUN chmod +x /opt/scripts/*.sh /opt/notify/*.py || true
+COPY notify/enhanced_webhook.py notify/tmdb_helper.py /opt/notify/
+COPY scripts/health_watcher.py scripts/log_monitor.sh scripts/metadata_fixer.py scripts/timestamp_helpers.py scripts/xtream_cache.py /opt/scripts/
+RUN chmod +x /opt/scripts/*.sh 2>/dev/null || true
 
-# FFmpeg wrapper: preserve original binary
-RUN mv /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg.real
+# FFmpeg wrapper (becomes /usr/local/bin/ffmpeg, calls ffmpeg.real under the hood)
 COPY ffmpeg-wrapper.sh /usr/local/bin/ffmpeg
 RUN chmod +x /usr/local/bin/ffmpeg \
- && ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg \
- && ln -sf /usr/local/bin/ffmpeg.real /usr/bin/ffmpeg.real \
- && ln -sf /usr/local/bin/ffprobe /usr/bin/ffprobe
+ && ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg
 
-# Entrypoint sequence
+# Entrypoint
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Default environment variables
-ENV TZ=America/New_York \
-    PORT=8000 \
-    HOST_PORT=7429 \
+# Default environment variables (TZ intentionally unset — set via .env)
+ENV PORT=8000 \
     NOTIFICATION_HTTP_PORT=9080 \
-    NOTIFICATION_WS_PORT=0 \
     NOTIFICATION_SSE_PATH=/events \
-    USE_CURL_TO_DOWNLOAD=false \
-    DOWNLOAD_SPEED_LIMIT_MBS=0 \
-    SNAP_LOG_FILE="/root/SnappierServer/server.log" \
-    EPG_CACHE="/root/SnappierServer/epg/epg_cache.json" \
-    SCHEDULES="/root/SnappierServer/Recordings/schedules.json" \
-    ALLOW_HTTP=0 \
-    ALLOW_HTTP_HOSTS="localhost,127.0.0.1,snappier-server" \
-    HTTPS_PROBE_TIMEOUT=3 \
-    HTTPS_PROBE_METHOD="HEAD" \
-    NOTIFY_TITLE_PREFIX="🎬 Snappier" \
+    NOTIFY_TITLE_PREFIX="Snappier" \
     SNAPPY_API_BASE="http://127.0.0.1:8000" \
     SNAPPY_API_TIMEOUT=5 \
     NOTIFY_DESC_LIMIT=900 \
@@ -214,9 +235,8 @@ ENV TZ=America/New_York \
 
 EXPOSE 8000 9080
 
-# Simple healthcheck against the Snappier HTTP endpoint
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-  CMD curl -fsS "http://127.0.0.1:${PORT}/serverStats" || exit 1
+  CMD timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8000' || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/usr/local/bin/entrypoint.sh"]

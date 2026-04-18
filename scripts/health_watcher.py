@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, time, json, argparse, requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def jprint(**kw): print(json.dumps(kw, ensure_ascii=False))
 
@@ -7,7 +9,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--interval", type=int, default=int(os.environ.get("HEALTH_INTERVAL_SEC","30")))
     ap.add_argument("--endpoint", default=os.environ.get("HEALTH_ENDPOINT","/serverStats"))
-    ap.add_argument("--base", default=os.environ.get("SNAPPY_API_BASE","http://127.0.0.1:8000"))
+    ap.add_argument("--base", default=os.environ.get("SNAPPY_API_BASE","https://127.0.0.1:443"))
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("HEALTH_HTTP_TIMEOUT","5")))
     ap.add_argument("--expect-min", type=int, default=int(os.environ.get("HEALTH_EXPECT_MIN","200")))
     ap.add_argument("--expect-max", type=int, default=int(os.environ.get("HEALTH_EXPECT_MAX","399")))
@@ -17,13 +19,17 @@ def main():
     args = ap.parse_args()
 
     url = args.base.rstrip("/") + args.endpoint
+    api_token = os.environ.get("SNAPPIER_API_TOKEN", "")
+    headers = {}
+    if api_token:
+        headers["x-api-token"] = api_token
     bad_count = 0
     last_warn_ts = 0
 
     while True:
         t0 = time.time()
         try:
-            r = requests.get(url, timeout=args.timeout)
+            r = requests.get(url, timeout=args.timeout, verify=False, headers=headers)
             ok = args.expect_min <= r.status_code <= args.expect_max
             if ok:
                 bad_count = 0  # reset on success; DO NOT notify 200s

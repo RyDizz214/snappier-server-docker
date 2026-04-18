@@ -1,0 +1,70 @@
+########################################
+# Snappier Server — VPN Overlay (gluetun)
+#
+# Routes snappier-server traffic through a gluetun VPN sidecar. Independent of
+# the ffmpeg overlay — use whichever combination you need:
+#
+#   VPN, built-in ffmpeg (most users):
+#     docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+#
+#   VPN + host ffmpeg (x86-64 dev only):
+#     docker compose -f docker-compose.yml \
+#                    -f docker-compose.vpn.yml \
+#                    -f docker-compose.host-ffmpeg.yml up -d
+#
+# Or set COMPOSE_FILE in .env to combine overlays automatically.
+#
+# PROVIDER-AGNOSTIC: gluetun supports 40+ VPN providers. Configure yours by
+# setting VPN_SERVICE_PROVIDER, VPN_TYPE, and the provider-specific auth vars
+# (WIREGUARD_PRIVATE_KEY, OPENVPN_USER, OPENVPN_PASSWORD, etc.) in .env.
+# Full provider list & required vars: https://github.com/qdm12/gluetun-wiki
+#
+# All variables in .env are passed through to the gluetun container, so any
+# gluetun-supported knob (SERVER_REGIONS, SERVER_HOSTNAMES, etc.) works
+# without editing this file.
+########################################
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: snappier-gluetun
+    init: true
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # Ports move here because snappier-server shares gluetun's network namespace
+    ports:
+      - "127.0.0.1:${HOST_PORT:-7429}:8000"
+      - "127.0.0.1:${NOTIFICATION_HTTP_PORT:-9080}:${NOTIFICATION_HTTP_PORT:-9080}"
+    # All VPN config comes from .env — any gluetun var (VPN_SERVICE_PROVIDER,
+    # VPN_TYPE, WIREGUARD_PRIVATE_KEY, OPENVPN_USER, SERVER_COUNTRIES, etc.)
+    # is passed through automatically.
+    env_file:
+      - .env
+    environment:
+      # Only firewall plumbing is pinned here (must match Snappier's port)
+      FIREWALL_INPUT_PORTS: "${FIREWALL_INPUT_PORTS:-8000}"
+    extra_hosts:
+      - "${SNAPPIER_DOMAIN:-snappier.local}:127.0.0.1"
+    volumes:
+      - ./gluetun:/gluetun
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ping -c 1 8.8.8.8 || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  snappier-server:
+    # Route all traffic through gluetun
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    # network_mode: service:X forbids ports/extra_hosts on the joining container
+    ports: !reset []
+    extra_hosts: !reset []

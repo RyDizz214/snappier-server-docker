@@ -7,6 +7,18 @@ import httpx
 import asyncio
 import aiofiles
 
+def _str(val):
+    """Safely extract a string from EPG fields that may be a plain string or
+    a dict like {"_": "text", "lang": "en"} (XMLTV lang-tagged format)."""
+    if val is None:
+        return ''
+    if isinstance(val, str):
+        return val
+    if isinstance(val, dict):
+        return val.get('_') or val.get('value') or next(
+            (v for v in val.values() if isinstance(v, str) and v), '')
+    return str(val)
+
 # Structured logging setup
 class StructuredLogger:
     """Structured logging with levels for better observability"""
@@ -99,9 +111,16 @@ PROBE_TIMEOUT = int(os.environ.get('HTTPS_PROBE_TIMEOUT','3'))
 PROBE_METHOD  = os.environ.get('HTTPS_PROBE_METHOD','HEAD').upper()
 SAFE_HTTP_HOSTS = set((os.environ.get('ALLOW_HTTP_HOSTS','localhost,127.0.0.1,snappier-server').split(',')))
 
+# Xtream channel cache for stream_id → epg_channel_id resolution
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
+try:
+    import xtream_cache as _xtream_cache
+except ImportError:
+    _xtream_cache = None
+
 SNAPPY_API_ENABLED = os.environ.get('SNAPPY_API_ENABLED','1') in ('1','true','True','yes','YES')
 SNAPPY_API_BASE    = os.environ.get('SNAPPY_API_BASE','http://127.0.0.1:8000').rstrip("/")
-SNAPPY_API_KEY     = os.environ.get('SNAPPY_API_KEY','')
+SNAPPY_API_KEY     = os.environ.get('SNAPPIER_API_TOKEN', os.environ.get('SNAPPY_API_TOKEN', os.environ.get('SNAPPY_API_KEY','')))
 SNAPPY_API_TIMEOUT = float(os.environ.get('SNAPPY_API_TIMEOUT','5'))
 
 # Cache limits
@@ -266,6 +285,7 @@ async def _ensure_epg_index():
     programmes = data.get('programmes') or []
     by_start = {}
     by_title = {}
+    by_channel = {}  # channel_id (lowercase) -> list of programmes
     total_entries = 0
 
     for ev in programmes:
@@ -273,12 +293,15 @@ async def _ensure_epg_index():
         if start_key is not None:
             by_start.setdefault(start_key, []).append(ev)
             total_entries += 1
-        title = (ev.get('title') or '').strip().lower()
+        title = _str(ev.get('title')).strip().lower()
         if title:
             bucket = by_title.setdefault(title, [])
             if len(bucket) < 50:
                 bucket.append(ev)
                 total_entries += 1
+        chan = (ev.get('channel') or '').lower()
+        if chan:
+            by_channel.setdefault(chan, []).append(ev)
 
     # Enforce size limits by keeping most recent/relevant entries
     if total_entries > EPG_INDEX_MAX_SIZE:
@@ -307,7 +330,7 @@ async def _ensure_epg_index():
                 display.setdefault(variant, disp)
 
     _epg_channel_display = display
-    _epg_index = {'by_start': by_start, 'by_title': by_title}
+    _epg_index = {'by_start': by_start, 'by_title': by_title, 'by_channel': by_channel}
     return data, _epg_index
 
 async def load_json(path, timeout_sec=5):
@@ -315,7 +338,7 @@ async def load_json(path, timeout_sec=5):
     try:
         async with aiofiles.open(path, 'r', encoding='utf-8') as f:
             content = await f.read()
-            result = json.loads(content)
+            result = await asyncio.to_thread(json.loads, content)
         return result
     except FileNotFoundError:
         logger.debug(f"File not found: {path}")
@@ -346,7 +369,7 @@ async def _probe_https_once(url_http: str) -> bool:
 
     _cache_stats['https_probes'] += 1
     try:
-        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT, verify=False) as client:
             if PROBE_METHOD == 'GET':
                 r = await client.get(https_url, follow_redirects=True)
             else:
@@ -384,7 +407,7 @@ async def _preflight_scan():
 def _api_headers():
     h = {'Accept': 'application/json'}
     if SNAPPY_API_KEY:
-        h['Authorization'] = f'Bearer {SNAPPY_API_KEY}'
+        h['x-api-token'] = SNAPPY_API_KEY
     return h
 
 async def api_search(title=None, channel=None, limit=10):
@@ -396,7 +419,7 @@ async def api_search(title=None, channel=None, limit=10):
         if channel: params['channel'] = channel
         if limit:   params['limit'] = str(limit)
         url = f"{SNAPPY_API_BASE}/epg/search"
-        async with httpx.AsyncClient(timeout=SNAPPY_API_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=SNAPPY_API_TIMEOUT, verify=False) as client:
             r = await client.get(url, params=params, headers=_api_headers())
             if not r.is_success:
                 return None, {}
@@ -410,9 +433,9 @@ async def api_search(title=None, channel=None, limit=10):
 
 def _coerce_event(ev):
     if not isinstance(ev, dict): return None
-    title = ev.get('title') or ev.get('name') or ev.get('programTitle')
-    subtitle = ev.get('subtitle') or ev.get('episodeTitle')
-    desc = ev.get('desc') or ev.get('description')
+    title = _str(ev.get('title')) or _str(ev.get('name')) or _str(ev.get('programTitle'))
+    subtitle = _str(ev.get('subtitle')) or _str(ev.get('episodeTitle'))
+    desc = _str(ev.get('desc')) or _str(ev.get('description'))
     start = ev.get('start') or ev.get('start_ts') or ev.get('startTime')
     channel = ev.get('channel') or ev.get('channelName') or ev.get('ch')
     typ = ev.get('type')
@@ -431,7 +454,7 @@ def _pick_best_from_list(lst, want_title=None, want_start=None):
             continue
 
         score = 0
-        ev_title = (cev.get('title') or '').strip().lower()
+        ev_title = _str(cev.get('title')).strip().lower()
         if want:
             if ev_title == want:
                 score += 10
@@ -476,6 +499,165 @@ async def api_find_program(channel=None, title=None, start=None):
         if hits: return _pick_best_from_list(hits, want_start=start), meta
     return None, meta
 
+def _parse_airtime_digits(airtime_str):
+    """Extract raw date-time digits from timeshift URL air time (YYYY-MM-DD:HH-MM).
+
+    Returns 12-digit string like '202603252000' (YYYYMMDDHHmm) or None.
+
+    IMPORTANT: The timeshift URL encodes air time in the PROVIDER's local timezone
+    (e.g. Nebula uses EDT, Endurance uses UTC). The raw digits match the provider's
+    own EPG start time digits regardless of timezone offset. We compare digits
+    directly rather than converting to epoch, which avoids timezone mismatches.
+    """
+    if not airtime_str:
+        return None
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2}):(\d{2})-(\d{2})$', airtime_str)
+    if not m:
+        return None
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}{m.group(5)}"
+
+
+def _epg_start_digits(raw_start):
+    """Extract raw date-time digits (YYYYMMDDHHmm) from an EPG start string.
+    Handles '20260325200000 -0400' and '20260325200000 +0000' formats.
+    Returns 12-digit string like '202603252000' or None."""
+    if not raw_start or not isinstance(raw_start, str):
+        return None
+    m = re.match(r'^(\d{12})', raw_start.strip())
+    return m.group(1) if m else None
+
+
+async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_id=None, provider_source=None):
+    """Direct EPG lookup for catch-up downloads.
+
+    If *epg_channel_id* is provided (resolved from Xtream API via stream_id),
+    filters to that exact channel. If *provider_source* is provided (e.g. "Nebula"),
+    digit matching prefers entries from that EPG source to avoid timezone collisions.
+    Falls back to most-recent-before-download.
+    """
+    data, index = await _ensure_epg_index()
+    if not data:
+        return None
+
+    # Strip superscript/modifier markers before normalizing (e.g. ᴸᶦᵛᵉ, ᴺᵉʷ)
+    _title_clean = re.sub(r'[\u02b0-\u02ff\u1d2c-\u1dff\u2070-\u209f]+', '', (title or ''))
+    title_norm = re.sub(r'[^\w\s]', '', _title_clean.strip().lower()).strip()
+    if not title_norm:
+        return None
+
+    air_digits = _parse_airtime_digits(airtime)
+    dl_epoch = _normalize_start(download_ts) if download_ts else None
+    if not air_digits and dl_epoch is None:
+        return None
+
+    by_channel = index.get('by_channel', {})
+    by_title_idx = index.get('by_title', {})
+
+    # Build candidate sets using indexes instead of scanning all 1.4M programmes
+    candidate_sets = []
+    if epg_channel_id:
+        chan_progs = by_channel.get(epg_channel_id.lower(), [])
+        if chan_progs:
+            # Try title match first (substring)
+            channel_filtered = [
+                ev for ev in chan_progs
+                if title_norm in re.sub(r'[\u02b0-\u02ff\u1d2c-\u1dff\u2070-\u209f]+', '',
+                    re.sub(r'[^\w\s]', '', _str(ev.get('title')).strip().lower())).strip()
+            ]
+            if channel_filtered:
+                candidate_sets.append(channel_filtered)
+            elif air_digits is not None:
+                # Fallback: channel + airtime without title filter.
+                # Xtream confirmed the channel and we have exact air time.
+                candidate_sets.append(chan_progs)
+    # Fallback: use title index (O(1) by exact title, much faster than full scan)
+    title_matches = by_title_idx.get(title_norm, [])
+    if title_matches:
+        candidate_sets.append(title_matches)
+
+    for candidates in candidate_sets:
+        best = None
+        best_start = None
+        best_priority = 999
+
+        # Phase 1 (digit matching from timeshift URL airtime) — primary strategy.
+        # When provider_source is known, prefer entries from that source to
+        # avoid digit collisions between different-timezone EPG sources
+        # (e.g. Nebula -0400 vs Veil +0000 both having digits '202603252000').
+        if best is None and air_digits is not None:
+            source_match = None   # best match from same source as provider
+            source_match_pri = 999
+            any_match = None      # best match from any source (fallback)
+            any_match_pri = 999
+            for ev in candidates:
+                ev_digits = _epg_start_digits(ev.get('start'))
+                if not ev_digits or ev_digits != air_digits:
+                    continue
+                ev_priority = ev.get('priority', 999)
+                if not isinstance(ev_priority, int):
+                    ev_priority = 999
+                ev_source = ev.get('source', '')
+                # Same-source match takes absolute priority
+                if provider_source and ev_source == provider_source:
+                    if source_match is None or ev_priority < source_match_pri:
+                        source_match = ev
+                        source_match_pri = ev_priority
+                # Track best from any source as fallback
+                if any_match is None or ev_priority < any_match_pri:
+                    any_match = ev
+                    any_match_pri = ev_priority
+            best = source_match or any_match
+            if best:
+                best_start = _normalize_start(best.get('start'))
+                best_priority = best.get('priority', 999)
+
+        # Phase 2: most recent start before download time (last resort)
+        if best is None and dl_epoch is not None:
+            for ev in candidates:
+                ev_priority = ev.get('priority', 999)
+                if not isinstance(ev_priority, int):
+                    ev_priority = 999
+                ev_start = _normalize_start(ev.get('start'))
+                if ev_start is None:
+                    continue
+                if ev_start > dl_epoch:
+                    continue
+                if (best_start is None
+                        or ev_start > best_start
+                        or (ev_start == best_start and ev_priority < best_priority)):
+                    best = ev
+                    best_start = ev_start
+                    best_priority = ev_priority
+
+        if best:
+            break
+
+    if not best:
+        method = "channel+digits" if epg_channel_id and air_digits else ("digits" if air_digits else "download_ts")
+        logger.debug(f"Catchup EPG lookup ({method}): no match",
+                     f"title={title_norm}, channel={epg_channel_id}, ref={airtime or download_ts}")
+        return None
+
+    meta = dict(best)
+    chan_key = meta.get('channel')
+    display = None
+    if chan_key:
+        display = _epg_channel_display.get(chan_key)
+        if not display:
+            display = _epg_channel_display.get(clean_channel_name(chan_key))
+    if display:
+        meta.setdefault('channelName', display)
+    if chan_key:
+        meta.setdefault('channelClean', clean_channel_name(chan_key))
+
+    method = "epoch" if dl_epoch and air_digits else ("channel+digits" if epg_channel_id and air_digits else ("digits" if air_digits else "download_ts"))
+    logger.debug(f"Catchup EPG lookup ({method}): matched",
+                 f"channel={chan_key}, name={display}, "
+                 f"title={_str(best.get('title'))}, "
+                 f"start={best.get('start')}, stop={best.get('stop')}")
+    return meta
+
+
 async def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=False):
     data, index = await _ensure_epg_index()
     if not data:
@@ -496,7 +678,7 @@ async def cache_find_program(channel=None, title=None, start_ts=None, prefer_pas
         # Search all programs and match with normalized title comparison
         # (can't rely on index since payload may not have punctuation like "gutfeld" vs "gutfeld!")
         for ev in data.get('programmes', []):
-            ev_title = (ev.get('title') or '').strip().lower()
+            ev_title = _str(ev.get('title')).strip().lower()
             ev_title_norm = re.sub(r'[^\w\s]', '', ev_title).strip()
 
             # Match if normalized titles are equal or very similar
@@ -542,7 +724,7 @@ async def cache_find_program(channel=None, title=None, start_ts=None, prefer_pas
 
     if not candidates and title_key:
         for ev in data.get('programmes', []):
-            ev_title = (ev.get('title') or '').strip().lower()
+            ev_title = _str(ev.get('title')).strip().lower()
             ev_title_norm = re.sub(r'[^\w\s]', '', ev_title).strip()
             if ev_title == title_key or ev_title_norm == title_key_norm:
                 candidates.append(ev)
@@ -562,7 +744,7 @@ async def cache_find_program(channel=None, title=None, start_ts=None, prefer_pas
     for ev in candidates:
         score = 0
         score_breakdown = {}
-        ev_title = (ev.get('title') or '').strip().lower()
+        ev_title = _str(ev.get('title')).strip().lower()
         ev_title_norm = re.sub(r'[^\w\s]', '', ev_title).strip()  # Normalize for comparison
         if title_key and ev_title:
             # Compare normalized titles (without punctuation)
@@ -650,7 +832,7 @@ async def cache_find_program(channel=None, title=None, start_ts=None, prefer_pas
 
         debug_scores.append({
             'channel': ev.get('channel'),
-            'title': ev.get('title'),
+            'title': _str(ev.get('title')),
             'score': score,
             'breakdown': score_breakdown
         })
@@ -773,42 +955,42 @@ async def pushover_send(title, message, url=None, url_title=None, priority=0, at
 
 _ACTION_MAP = {
     # canonical actions
-    "catchup_started":      {"title": "Catch-Up Download Started 📥", "priority": 0},
-    "catchup_completed":    {"title": "Catch-Up Download Completed ✅", "priority": 0},
-    "catchup_failed":       {"title": "Catch-Up Download Failed ❗",   "priority": 1},
-    "catchup_exit":         {"title": "Catch-Up Download Exited ⏹️",  "priority": 0},
+    "catchup_started":      {"title": "📥 Catch-Up Download Started", "priority": 0},
+    "catchup_completed":    {"title": "✅ Catch-Up Download Complete", "priority": 0},
+    "catchup_failed":       {"title": "❗ Catch-Up Download Failed",   "priority": 1},
+    "catchup_exit":         {"title": "⏹️ Catch-Up Download Exited",  "priority": 0},
 
-    "movie_started":        {"title": "Movie Download Started 🎬",     "priority": 0},
-    "movie_completed":      {"title": "Movie Download Completed ✅",   "priority": 0},
-    "movie_failed":         {"title": "Movie Download Failed ❗",      "priority": 1},
-    "movie_exit":           {"title": "Movie Download Exited ⏹️",      "priority": 0},
+    "movie_started":        {"title": "🎬 Movie Download Started",     "priority": 0},
+    "movie_completed":      {"title": "✅ Movie Download Complete",   "priority": 0},
+    "movie_failed":         {"title": "❗ Movie Download Failed",      "priority": 1},
+    "movie_exit":           {"title": "⏹️ Movie Download Exited",      "priority": 0},
 
-    "series_started":       {"title": "Series Download Started 🎞️",   "priority": 0},
-    "series_completed":     {"title": "Series Download Completed ✅",  "priority": 0},
-    "series_failed":        {"title": "Series Download Failed ❗",     "priority": 1},
-    "series_exit":          {"title": "Series Download Exited ⏹️",     "priority": 0},
+    "series_started":       {"title": "🎞️ Series Download Started",   "priority": 0},
+    "series_completed":     {"title": "✅ Series Download Complete",  "priority": 0},
+    "series_failed":        {"title": "❗ Series Download Failed",     "priority": 1},
+    "series_exit":          {"title": "⏹️ Series Download Exited",     "priority": 0},
 
-    "recording_scheduled":  {"title": "Recording Scheduled 🗓️",        "priority": 0},
-    "recording_started":    {"title": "Recording Started 🔴",          "priority": 0},
-    "recording_live_started": {"title": "Recording Started 🔴",        "priority": 0},
-    "recording_completed":  {"title": "Recording Completed ✅",         "priority": 0},
-    "recording_failed":     {"title": "Recording Failed ❗",           "priority": 1},
-    "recording_cancelled":  {"title": "Recording Cancelled ❌",         "priority": 0},
+    "recording_scheduled":  {"title": "🗓️ Recording Scheduled",        "priority": 0},
+    "recording_started":    {"title": "🔴 Recording Started",          "priority": 0},
+    "recording_live_started": {"title": "🔴 Recording Started",        "priority": 0},
+    "recording_completed":  {"title": "✅ Recording Complete",         "priority": 0},
+    "recording_failed":     {"title": "❗ Recording Failed",           "priority": 1},
+    "recording_cancelled":  {"title": "❌ Recording Cancelled",         "priority": 0},
 
-    "health_warn":          {"title": "Health Warning ❗",             "priority": 1},
-    "server_error":         {"title": "Server Error ❗",               "priority": 1},
-    "server_failed":        {"title": "Server Failure ❗",             "priority": 1},
-    "epg_match":            {"title": "EPG Match 📇",                  "priority": -2},
-    "ffmpeg_retry":         {"title": "Stream Reconnected/Upgraded 🔁","priority": -1},
+    "health_warn":          {"title": "❗ Health Warning",             "priority": 1},
+    "server_error":         {"title": "❗ Server Error",               "priority": 1},
+    "server_failed":        {"title": "❗ Server Failure",             "priority": 1},
+    "epg_match":            {"title": "📇 EPG Match",                  "priority": -2},
+    "ffmpeg_retry":         {"title": "🔁 Stream Reconnected/Upgraded","priority": -1},
 
     # extra events emitted by the log monitor (low priority/noise)
-    "remux_started":        {"title": "Remux Started 🧩",              "priority": -2},
-    "remux_finished":       {"title": "Remux Finished ✅",             "priority": -2},
-    "download_started":     {"title": "Download Started 📥",           "priority": -2},
-    "cleanup_deleted_ts":   {"title": "Cleanup: TS Deleted 🧹",        "priority": -2},
+    "remux_started":        {"title": "🧩 Remux Started",              "priority": -2},
+    "remux_finished":       {"title": "✅ Remux Finished",             "priority": -2},
+    "download_started":     {"title": "📥 Download Started",           "priority": -2},
+    "cleanup_deleted_ts":   {"title": "🧹 Cleanup: TS Deleted",        "priority": -2},
 
     # synonyms for older emitters
-    "catchup_finished":     {"title": "Catch-Up Download Completed ✅", "priority": 0},
+    "catchup_finished":     {"title": "✅ Catch-Up Download Complete", "priority": 0},
 }
 
 def safe_trim(s: str, limit: int) -> str:
@@ -849,6 +1031,7 @@ async def notify(request: Request):
     start_local = (payload or {}).get('start_local') or (payload or {}).get('start_local_formatted')
     end     = (payload or {}).get('end')     or (payload or {}).get('end_time')
     end_local = (payload or {}).get('end_local') or (payload or {}).get('end_local_formatted')
+    airtime = (payload or {}).get('airtime')  # from timeshift URL, format: YYYY-MM-DD:HH-MM
 
     # Extract action early so we can use it for EPG lookup logic
     action = (payload or {}).get('action', '').strip().lower()
@@ -892,17 +1075,33 @@ async def notify(request: Request):
     if is_catchup and not channel_hint:
         logger.debug("Catchup event with empty channel", f"action={action}, title={title}, start={start}")
 
-    # Prefer cache lookup when we have a start time but no channel (e.g., catchups)
-    # For catchups: search by title primarily, but use the start time to disambiguate multiple airings
-    # For recordings: use the timestamp to find the exact program
-    if start and not channel_hint and not channel_clean:
-        if is_catchup:
-            # For catch-ups: search by title, but pass start time to prefer the right airing
-            # (there may be multiple airings/reruns of the same program)
-            meta = await cache_find_program(None, title, start, prefer_past=True)
-            logger.debug(f"Catchup EPG lookup by title with timestamp preference", f"title={title}, start={start}")
-        else:
-            meta = await cache_find_program(None, title, start, prefer_past=is_catchup)
+    # EPG lookup
+    # Resolve stream_id → epg_channel_id via Xtream API cache (all recording types)
+    provider_domain = (payload or {}).get('provider_domain')
+    stream_id = (payload or {}).get('stream_id')
+    epg_channel_id = None
+    provider_channel_name = None
+    provider_source_name = None
+    if _xtream_cache and provider_domain and stream_id:
+        # Run in thread to avoid blocking the event loop during cache refresh (~7s)
+        epg_channel_id = await asyncio.to_thread(_xtream_cache.lookup, provider_domain, stream_id)
+        # Get the provider-specific channel name (e.g. "Bravo East" from Nebula)
+        raw_name = await asyncio.to_thread(_xtream_cache.lookup_name, provider_domain, stream_id)
+        if raw_name:
+            provider_channel_name = re.sub(r'^[A-Z]{2,3}\s*:\s*', '', raw_name).strip() or raw_name
+        # Get the EPG source name (e.g. "Nebula") to prefer same-source EPG entries
+        provider_source_name = await asyncio.to_thread(_xtream_cache.lookup_provider_name, provider_domain)
+        if epg_channel_id:
+            logger.debug("Xtream channel resolved",
+                         f"provider={provider_domain}, stream_id={stream_id}, epg_channel={epg_channel_id}, provider_name={provider_channel_name}, source={provider_source_name}")
+
+    if is_catchup and title:
+        meta = await cache_find_catchup(title, airtime=airtime, download_ts=start, epg_channel_id=epg_channel_id, provider_source=provider_source_name)
+    elif epg_channel_id and title and start:
+        # Exact EPG lookup using resolved channel ID (for live/scheduled recordings)
+        meta = await cache_find_catchup(title, download_ts=start, epg_channel_id=epg_channel_id)
+    elif start and not channel_hint and not channel_clean:
+        meta = await cache_find_program(None, title, start)
     elif SNAPPY_API_ENABLED and (title or channel_hint or channel_clean):
         meta, _ = await api_find_program(channel=channel_hint, title=title, start=start)
         used_api = bool(meta)
@@ -912,8 +1111,7 @@ async def notify(request: Request):
                 meta = alt_meta
             used_api = used_api or bool(alt_meta)
     if not meta:
-        # For fallback search: use timestamp for both catch-ups and recordings to find the right airing
-        meta = await cache_find_program(channel_hint or channel_clean, title, start, prefer_past=is_catchup)
+        meta = await cache_find_program(channel_hint or channel_clean, title, start)
 
     # Debug: log EPG metadata found for catch-ups
     if is_catchup and meta:
@@ -957,6 +1155,9 @@ async def notify(request: Request):
         (payload or {}).get("ch"),
         (payload or {}).get("channel_name"),
         (payload or {}).get("channelClean"),
+        # Provider-specific name from Xtream API (e.g. "Bravo East" from Nebula)
+        # takes priority over generic EPG display names (e.g. "Bravo HD")
+        provider_channel_name,
         (meta or {}).get("channelName"),
         (meta or {}).get("displayName"),
         (meta or {}).get("channel"),
@@ -991,7 +1192,7 @@ async def notify(request: Request):
     tmdb_meta = None
     if TMDB_AVAILABLE and action.startswith("movie_"):
         try:
-            tmdb_meta = enrich_movie_metadata(program_name, (payload or {}).get("file"))
+            tmdb_meta = await asyncio.to_thread(enrich_movie_metadata, program_name, (payload or {}).get("file"))
             if tmdb_meta:
                 # Enrich with TMDB data - prioritize TMDB descriptions for movies
                 if tmdb_meta.get('overview'):
@@ -1011,7 +1212,7 @@ async def notify(request: Request):
     # TMDB enrichment for series actions
     if TMDB_AVAILABLE and action.startswith("series_"):
         try:
-            tmdb_meta = enrich_series_metadata(program_name)
+            tmdb_meta = await asyncio.to_thread(enrich_series_metadata, program_name)
             if tmdb_meta:
                 # Enrich with TMDB data - prioritize TMDB descriptions for TV series
                 if tmdb_meta.get('overview'):
@@ -1047,6 +1248,13 @@ async def notify(request: Request):
             pass  # If calculation fails, leave duration_min as None
 
     filepath     = (payload or {}).get("file")
+    # Rewrite catch-up filepath to include channel name (matches what metadata_fixer will rename to)
+    if filepath and channel_name and channel_name != "Unknown":
+        import os as _os
+        _fname = _os.path.basename(filepath)
+        if _fname.startswith("--"):
+            _chan_fs = channel_name.replace(" ", "_")
+            filepath = _os.path.join(_os.path.dirname(filepath), _chan_fs + _fname)
     error_msg    = (payload or {}).get("error")
     exit_code    = _as_int((payload or {}).get("exit_code"))
     exit_reason  = (payload or {}).get("exit_reason")
@@ -1180,7 +1388,7 @@ async def notify(request: Request):
 
         body = "\n".join(lines).strip()
 
-    default_title = (payload or {}).get("title") or program_name
+    default_title = f"Snappier Event: {action}"
     action_meta = _ACTION_MAP.get(action, {"title": default_title, "priority": 0})
     push_title = action_meta["title"]
     priority   = action_meta["priority"]
@@ -1256,6 +1464,14 @@ async def startup_event():
         logger.info("Snappy API enabled", f"base={SNAPPY_API_BASE}, timeout={SNAPPY_API_TIMEOUT}s")
     else:
         logger.info("Snappy API disabled")
+
+    # Pre-load Xtream channel cache (stream_id → epg_channel_id)
+    if _xtream_cache:
+        try:
+            await asyncio.to_thread(_xtream_cache.refresh, True)
+            logger.info("Xtream channel cache loaded")
+        except Exception as e:
+            logger.warning("Xtream cache pre-load failed (will retry on first lookup)", str(e))
 
     # Show final startup message
     logger.info("Application startup complete.")

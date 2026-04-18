@@ -35,22 +35,54 @@ NOTIFICATION_SSE_PATH="${NOTIFICATION_SSE_PATH:-/events}"
 
 # HTTPS upgrade configuration
 # Hosts that are safe to use HTTP (won't be upgraded to HTTPS)
-ALLOW_HTTP_HOSTS="${ALLOW_HTTP_HOSTS:-localhost,127.0.0.1,snappier-server,pro.business-cdn.me}"
+ALLOW_HTTP_HOSTS="${ALLOW_HTTP_HOSTS:-localhost,127.0.0.1,snappier-server,cf.dizzplays.now}"
 export ALLOW_HTTP_HOSTS
 
 # Health monitor helpers
 HEALTH_INTERVAL_SEC="${HEALTH_INTERVAL_SEC:-30}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-/serverStats}"
-SNAPPY_API_BASE="${SNAPPY_API_BASE:-http://127.0.0.1:8000}"
+SNAPPY_API_BASE="${SNAPPY_API_BASE:-https://127.0.0.1:8000}"
 
 LOG_ROOT="${LOG_ROOT:-/logs}"
 
+# API token
+SNAPPIER_API_TOKEN="${SNAPPIER_API_TOKEN:-}"
+
 # -----------------------------
+# Configure timezone dynamically
+# -----------------------------
+if [ -n "${TZ}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
+  log "Setting timezone to ${TZ}"
+  ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime
+  echo "${TZ}" > /etc/timezone
+else
+  log "Warning: Invalid or missing TZ=${TZ}, using container default"
+fi
+
+
 # Layout / directories
 # -----------------------------
-mkdir -p "${LOG_ROOT}" /root/SnappierServer/epg || true
+mkdir -p "${LOG_ROOT}" /root/SnappierServer/epg /root/SnappierServer/logs || true
 mkdir -p "${RECORDINGS_DIR}" "${MOVIES_DIR}" "${SERIES_DIR}" || true
-: > "${SNAP_LOG_FILE}" || true
+
+# -----------------------------
+# Persist API token into config.json
+# -----------------------------
+CONFIG_FILE="/root/SnappierServer/config.json"
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo '{}' > "${CONFIG_FILE}"
+fi
+if [[ -n "${SNAPPIER_API_TOKEN}" ]]; then
+  SNAPPIER_API_TOKEN="${SNAPPIER_API_TOKEN}" python3 -c "
+import json, os, sys
+cfg = {}
+try:
+    with open(sys.argv[1]) as f: cfg = json.load(f)
+except: pass
+cfg['api_token'] = os.environ['SNAPPIER_API_TOKEN']
+with open(sys.argv[1],'w') as f: json.dump(cfg, f, indent=2)
+" "${CONFIG_FILE}" 2>/dev/null && log "API token written to config.json" || log "WARN: failed to write API token"
+fi
 
 # -----------------------------
 # Pretty banner
@@ -133,7 +165,7 @@ start_notify () {
     exec uvicorn \
       --host="${NOTIFICATION_BIND}" \
       --port="${NOTIFICATION_HTTP_PORT}" \
-      --workers=4 \
+      --workers=2 \
       --timeout-keep-alive=30 \
       --log-level=info \
       enhanced_webhook:app >>"${LOG_ROOT}/notify.log" 2>&1
@@ -180,10 +212,10 @@ start_helpers () {
     ( exec python3 -u /opt/scripts/health_watcher.py >>"${LOG_ROOT}/health_watcher.log" 2>&1 ) & echo $! > /tmp/health_watcher.pid
   fi
 
-  # schedule_watcher.py
-  if [[ -f /opt/scripts/schedule_watcher.py ]]; then
-    log "Starting schedule_watcher ..."
-    ( exec python3 -u /opt/scripts/schedule_watcher.py >>"${LOG_ROOT}/schedule_watcher.log" 2>&1 ) & echo $! > /tmp/schedule_watcher.pid
+  # metadata_fixer.py — fixes bare time strings in catch-up .meta.json files
+  if [[ -f /opt/scripts/metadata_fixer.py ]]; then
+    log "Starting metadata_fixer ..."
+    ( exec python3 -u /opt/scripts/metadata_fixer.py >>"${LOG_ROOT}/metadata_fixer.log" 2>&1 ) & echo $! > /tmp/metadata_fixer.pid
   fi
 
   # log_monitor.sh — starts AFTER notify so it can post to /notify
@@ -203,15 +235,6 @@ start_helpers () {
     ) & echo $! > /tmp/log_monitor.pid
   fi
 
-  # log_rotate.sh — keep log files bounded
-  if [[ -x /opt/scripts/log_rotate.sh ]]; then
-    log "Starting log_rotate ..."
-    (
-      export LOG_DIR="${LOG_ROOT}"
-      export SNAP_LOG_FILE="${SNAP_LOG_FILE}"
-      exec /opt/scripts/log_rotate.sh >>"${LOG_ROOT}/log_rotate_runner.log" 2>&1
-    ) & echo $! > /tmp/log_rotate.pid
-  fi
 }
 
 # -----------------------------
@@ -261,7 +284,7 @@ cleanup () {
   fi
 
   # Kill all background processes with graceful shutdown
-  for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/schedule_watcher.pid /tmp/log_monitor.pid /tmp/log_rotate.pid; do
+  for f in /tmp/notify.pid /tmp/health_watcher.pid /tmp/metadata_fixer.pid /tmp/log_monitor.pid; do
     if [[ -f "$f" ]]; then
       local pid=$(cat "$f" 2>/dev/null)
       if [[ -n "$pid" ]]; then
@@ -330,10 +353,22 @@ fi
 # 4) Build args & launch
 build_args
 
-# Increase Node.js heap size to 8GB for EPG processing to prevent OOM crashes
-# when merging large EPG datasets from multiple sources
-export NODE_OPTIONS="--max-old-space-size=8192"
+# Increase Node.js heap size to 16GB for EPG processing to prevent OOM crashes
+# when merging large EPG datasets from multiple sources (1M+ programmes)
+# PKG_NODE_OPTIONS works with pkg-compiled binaries (pkg v5.8+)
+# NODE_OPTIONS/UV_V8_OPTIONS are fallbacks for non-pkg Node.js binaries
+export PKG_NODE_OPTIONS="--max-old-space-size=16384"
+export NODE_OPTIONS="--max-old-space-size=16384"
+export UV_V8_OPTIONS="--max-old-space-size=16384"
 
 log "Launching: ${SNAPPIER_BIN} ${ARGS[*]}"
 cd /opt/SnappierServer
-exec "${SNAPPIER_BIN}" "${ARGS[@]}"
+
+# Filter noisy lines from container stdout to keep docker logs clean:
+# - /serverStats health checks (every 30s from health_watcher)
+# - Per-provider [Xtream] fetch lines (keep only the Total: summary)
+# Full unfiltered output is always in $SNAP_LOG_FILE
+FILTER_PIPE="/tmp/snappier_stdout"
+mkfifo "$FILTER_PIPE" 2>/dev/null || true
+grep --line-buffered -vE 'GET /serverStats |^\[Xtream\] (Fetching from:|Loaded .* categories|Mapped .* channel URLs)' < "$FILTER_PIPE" &
+exec "${SNAPPIER_BIN}" "${ARGS[@]}" > "$FILTER_PIPE" 2>&1

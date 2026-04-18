@@ -2,25 +2,33 @@
 set -euo pipefail
 
 # -------- Config (env tunables) --------
-ALLOW_HTTP="${ALLOW_HTTP:-0}"
-ALLOW_HTTP_HOSTS="${ALLOW_HTTP_HOSTS:-localhost,127.0.0.1,snappier-server}"
-HTTPS_PROBE_TIMEOUT="${HTTPS_PROBE_TIMEOUT:-3}"
-HTTPS_PROBE_METHOD="${HTTPS_PROBE_METHOD:-HEAD}"   # HEAD or GET
 
 # Catch-up download extension
 CATCHUP_EXTENSION_ENABLED="${CATCHUP_EXTENSION_ENABLED:-1}"
 CATCHUP_BUFFER_SECONDS="${CATCHUP_BUFFER_SECONDS:-180}"  # 3 minutes default
 
-# Network flags (applied only for http/https inputs)
-NET_FLAGS=( -reconnect 1 -reconnect_streamed 1 -reconnect_at_eof 1 \
-            -reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx \
+# Network flags (only flags snappier-server doesn't already pass)
+# Snappier natively sets: -reconnect 1, -reconnect_streamed 1, -reconnect_at_eof 1, -reconnect_delay_max 2
+# We only add: network error recovery + timeouts
+NET_FLAGS=( -reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx \
             -rw_timeout 15000000 -timeout 15000000 )
 FFMPEG_REAL="${FFMPEG_REAL:-/usr/bin/ffmpeg.real}"
 
 # Logging
 LOG_FILE="${FFMPEG_WRAPPER_LOG:-/logs/ffmpeg_wrapper.log}"
+LOG_MAX_BYTES="${FFMPEG_WRAPPER_LOG_MAX:-52428800}"  # 50MB default
+_log_rotate_checked=0
 log(){
   if [[ -n "${LOG_FILE}" ]]; then
+    # Rotate if > 50MB (check once per ffmpeg invocation to avoid stat overhead)
+    if [[ "${_log_rotate_checked}" == "0" && -f "${LOG_FILE}" ]]; then
+      _log_rotate_checked=1
+      local size
+      size=$(stat -c%s "${LOG_FILE}" 2>/dev/null || echo 0)
+      if [[ "$size" -gt "${LOG_MAX_BYTES}" ]]; then
+        mv "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null || true
+      fi
+    fi
     printf '[ffmpeg-wrapper] %s %s\n' "$(date -u +%FT%TZ)" "$*" >> "${LOG_FILE}" 2>/dev/null || true
   fi
 }
@@ -29,95 +37,113 @@ log(){
 is_http_like(){ [[ "$1" == http://* || "$1" == https://* ]]; }
 is_progress_flag(){ [[ "$1" == "-progress" || "$1" == "--progress" ]]; }
 
-IFS="," read -r -a SAFE_HOSTS <<< "${ALLOW_HTTP_HOSTS}"
+# -------- HLS live-playback optimisation --------
+# Snappier >= 1.5 transcodes ALL live streams (libx264/libfdk_aac) for dashboard
+# HLS playback.  This is only needed for H.265/HEVC sources (browsers can't play
+# them).  For H.264 sources we switch to -c copy (near-zero CPU).  For H.265 we
+# keep the transcode but add ultrafast + 1080p downscale.
+HLS_OPTIMIZE_ENABLED="${HLS_OPTIMIZE_ENABLED:-1}"
+HLS_MAX_HEIGHT="${HLS_MAX_HEIGHT:-1080}"
+# Use the ffprobe shim (not FFPROBE_REAL which points to the raw host binary
+# that can't run without ld-linux wrapper)
+FFPROBE_CMD="/usr/local/bin/ffprobe"
 
-host_is_safe_http(){
-  local host="$1"
-  for h in "${SAFE_HOSTS[@]}"; do
-    [[ "$host" == "$h" ]] && return 0
+is_hls_live_playback(){
+  local has_net_input=0 has_hls_fmt=0 prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "-i" ]] && is_http_like "$arg"; then has_net_input=1; fi
+    if [[ "$prev" == "-f" && "$arg" == "hls" ]]; then has_hls_fmt=1; fi
+    prev="$arg"
+  done
+  [[ "$has_net_input" == "1" && "$has_hls_fmt" == "1" ]]
+}
+
+# Extract the -i URL from ARGS
+get_input_url(){
+  local prev=""
+  for arg in "${ARGS[@]}"; do
+    if [[ "$prev" == "-i" ]] && is_http_like "$arg"; then
+      echo "$arg"; return 0
+    fi
+    prev="$arg"
   done
   return 1
 }
 
-try_https(){
+# Probe source: returns "codec_name,height" (e.g. "h264,1080" or "hevc,2160").
+# Timeout keeps startup snappy.
+probe_video_stream(){
   local url="$1"
-  local method="${HTTPS_PROBE_METHOD^^}"
-
-  # Try a lightweight HEAD probe first unless GET is explicitly requested
-  if [[ "$method" != "GET" ]]; then
-    if curl -fsSIL --max-time "${HTTPS_PROBE_TIMEOUT}" "$url" >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-
-  # Fall back to a ranged GET probe. Some providers (e.g. Cloudflare) ignore range
-  # requests and stream data indefinitely. Treat a timeout WITH bytes downloaded as success.
-  local out status code size
-  if out="$(curl -sSL --range 0-0 --max-time "${HTTPS_PROBE_TIMEOUT}" -o /dev/null -w '%{http_code} %{size_download}' "$url" 2>/dev/null)"; then
-    status=0
-  else
-    status=$?
-  fi
-  code="$(printf '%s' "$out" | awk '{print $1}')"
-  size="$(printf '%s' "$out" | awk '{print $2}')"
-
-  if [[ "$status" -eq 0 && ( "$code" == "200" || "$code" == "206" ) && "${size:-0}" -ge 0 ]]; then
-    return 0
-  fi
-  if [[ "$status" -eq 28 && "${size:-0}" -gt 0 ]]; then
-    # Timeout but data flowed; assume HTTPS works
-    return 0
-  fi
-  log "HTTPS probe details: status=${status} code=${code:-?} size=${size:-0} url=${url}"
-  return 1
+  "${FFPROBE_CMD}" -v quiet -select_streams v:0 \
+    -show_entries stream=codec_name,height -of csv=p=0 \
+    -rw_timeout 5000000 -timeout 5000000 \
+    "$url" 2>/dev/null | head -1
 }
 
-rewrite_arg(){
-  local arg="$1"
-  # only rewrite http://… inputs; never touch outputs or other args
-  [[ "${arg}" != http://* ]] && { printf '%s\n' "${arg}"; return; }
-  [[ "${ALLOW_HTTP}" == "1" ]] && { printf '%s\n' "${arg}"; return; }
-  local rest="${arg#http://}"
-  local host_port="${rest%%/*}"
-  local path="${rest#*/}"
-  [[ "${path}" == "${host_port}" ]] && path=""
+# Rewrite for H.264 source: copy video, transcode audio to AAC (browsers can't
+# decode AC3/E-AC3 in HLS).  Audio transcoding is near-zero CPU.
+rewrite_hls_to_copy(){
+  local new_args=()
+  local i=0
+  while [[ $i -lt ${#ARGS[@]} ]]; do
+    local arg="${ARGS[$i]}"
+    case "$arg" in
+      -c:v)  new_args+=("-c:v" "copy"); i=$((i+2)); continue ;;
+      -c:a)  new_args+=("-c:a" "libfdk_aac" "-b:a" "192k" "-ac" "2"); i=$((i+2)); continue ;;
+      # Drop video-encode-only flags (not needed with -c:v copy)
+      -pix_fmt|-sc_threshold|-force_key_frames|-b:v|-preset|-tune|-profile:v|-level)
+        i=$((i+2)); continue ;;
+      # Drop original audio params (we set our own above)
+      -b:a|-ar|-af|-ac)
+        i=$((i+2)); continue ;;
+      *)  new_args+=("$arg") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
 
-  local host="${host_port%%:*}"
-  local port=""
-  if [[ "${host_port}" == *:* ]]; then
-    port="${host_port##*:}"
-  fi
+# Rewrite for non-H.264 source: keep transcode, add ultrafast preset,
+# and only downscale if source height > HLS_MAX_HEIGHT.
+# Usage: optimize_hls_transcode <source_height>
+optimize_hls_transcode(){
+  local source_height="${1:-0}"
+  local needs_scale=0
+  [[ "$source_height" -gt "${HLS_MAX_HEIGHT}" ]] 2>/dev/null && needs_scale=1
 
-  host_is_safe_http "${host}" && { printf '%s\n' "${arg}"; return; }
-
-  local https_host="${host}"
-  if [[ -n "${port}" && "${port}" != "${host}" ]]; then
-    if [[ "${port}" == "80" ]]; then
-      https_host="${host}"
-    else
-      https_host="${host}:${port}"
+  local new_args=()
+  local has_preset=0 has_scale=0
+  for arg in "${ARGS[@]}"; do
+    [[ "$arg" == "-preset" ]] && has_preset=1
+    [[ "$arg" == "-vf" ]] && has_scale=1
+  done
+  local i=0
+  while [[ $i -lt ${#ARGS[@]} ]]; do
+    local arg="${ARGS[$i]}"
+    local next="${ARGS[$((i+1))]:-}"
+    if [[ "$arg" == "-c:v" && "$next" == "libx264" && "$has_preset" == "0" ]]; then
+      new_args+=("-c:v" "libx264" "-preset" "ultrafast")
+      i=$((i+2)); continue
     fi
-  fi
-
-  local https_url="https://${https_host}"
-  [[ -n "${path}" ]] && https_url="${https_url}/${path}"
-
-  # Skip probe - trust HTTPS upgrade and let ffmpeg handle connection errors
-  log "Upgraded stream to HTTPS: ${arg} -> ${https_url}"
-  printf '%s\n' "${https_url}"
+    if [[ "$arg" == "-f" && "$next" == "hls" && "$has_scale" == "0" && "$needs_scale" == "1" ]]; then
+      new_args+=("-vf" "scale=-2:${HLS_MAX_HEIGHT}:flags=fast_bilinear")
+      has_scale=1
+    fi
+    new_args+=("$arg")
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
 }
 
 # -------- Catch-up detection --------
 is_catchup_download(){
-  # Catch-up files start with -- (no channel prefix)
-  # Pattern: --Program--START--UUID.ts
+  # Detect catch-up/timeshift downloads by checking for /timeshift/ in input URL
+  local prev_arg=""
   for arg in "$@"; do
-    if [[ "$arg" == */--*.ts ]] || [[ "$arg" == */--*.mkv ]] || [[ "$arg" == */--*.mp4 ]]; then
-      local filename="${arg##*/}"
-      if [[ "$filename" == --* ]]; then
-        return 0
-      fi
+    if [[ "$prev_arg" == "-i" ]] && [[ "$arg" == *"/timeshift/"* ]]; then
+      return 0
     fi
+    prev_arg="$arg"
   done
   return 1
 }
@@ -197,15 +223,6 @@ extend_timeshift_url(){
   return 1
 }
 
-# Smooth remux: add bitstream filters and timestamp guards when copying TS -> MKV
-run_ffmpeg(){
-  if [[ "${SAW_NET_INPUT}" == "1" ]]; then
-    "${FFMPEG_REAL}" "${NET_FLAGS[@]}" "$@"
-  else
-    "${FFMPEG_REAL}" "$@"
-  fi
-}
-
 main(){
   START_TIME=$(date +%s%N)
   ARGS=()
@@ -222,39 +239,59 @@ main(){
   fi
 
   for a in "$@"; do
-    skip_https_rewrite=0
-
     if is_http_like "$a"; then
-      if is_progress_flag "$PREV_ARG"; then
-        skip_https_rewrite=1
-      else
+      if ! is_progress_flag "$PREV_ARG"; then
         SAW_NET_INPUT=1
       fi
     fi
 
-    # Apply HTTPS rewrite
-    if [[ "$skip_https_rewrite" == "1" ]]; then
-      rewritten="$a"
-      log "Keeping HTTP for progress callback: $a"
-    else
-      rewritten="$(rewrite_arg "$a")"
-    fi
-
-    if [[ "$PREV_ARG" == "-i" ]] && [[ "$rewritten" == *.ts ]]; then
+    if [[ "$PREV_ARG" == "-i" ]] && [[ "$a" == *.ts ]]; then
       HAS_TS_INPUT=1
     fi
-    if [[ "$rewritten" == *.mkv ]]; then
+    if [[ "$a" == *.mkv ]]; then
       HAS_MKV_OUTPUT=1
     fi
 
     # Modify timeshift URL for catch-up downloads (extend minutes parameter in URL)
-    if [[ "${IS_CATCHUP}" == "1" ]] && [[ "$PREV_ARG" == "-i" ]] && [[ "$rewritten" =~ /timeshift/ ]]; then
-      rewritten="$(extend_timeshift_url "$rewritten")"
+    rewritten="$a"
+    if [[ "${IS_CATCHUP}" == "1" ]] && [[ "$PREV_ARG" == "-i" ]] && [[ "$a" =~ /timeshift/ ]]; then
+      rewritten="$(extend_timeshift_url "$a")"
     fi
 
     ARGS+=("$rewritten")
     PREV_ARG="$a"
   done
+
+  # HLS live playback: probe source codec+height and decide copy vs transcode
+  if [[ "${HLS_OPTIMIZE_ENABLED}" == "1" ]] && is_hls_live_playback "${ARGS[@]}"; then
+    INPUT_URL="$(get_input_url)" || true
+    if [[ -n "${INPUT_URL}" ]]; then
+      PROBE_RESULT="$(probe_video_stream "${INPUT_URL}")" || true
+      SOURCE_CODEC="${PROBE_RESULT%%,*}"
+      SOURCE_HEIGHT="${PROBE_RESULT##*,}"
+      # If probe returned a single value (no comma), height is unknown
+      [[ "$SOURCE_CODEC" == "$SOURCE_HEIGHT" ]] && SOURCE_HEIGHT=0
+      log "HLS live playback — source codec: ${SOURCE_CODEC:-unknown}, height: ${SOURCE_HEIGHT:-unknown}"
+
+      case "${SOURCE_CODEC}" in
+        h264|"")
+          # H.264 (or probe failed/timed out): remux with -c copy, near-zero CPU
+          log "H.264 source — switching to -c copy (remux only)"
+          rewrite_hls_to_copy
+          ;;
+        *)
+          # H.265/MPEG-2/etc: keep transcode, add ultrafast, downscale only if > 1080p
+          if [[ "${SOURCE_HEIGHT}" -gt "${HLS_MAX_HEIGHT}" ]] 2>/dev/null; then
+            log "Non-H.264 source (${SOURCE_CODEC} ${SOURCE_HEIGHT}p) — ultrafast + downscale to ${HLS_MAX_HEIGHT}p"
+          else
+            log "Non-H.264 source (${SOURCE_CODEC} ${SOURCE_HEIGHT}p) — ultrafast only (no downscale needed)"
+          fi
+          optimize_hls_transcode "${SOURCE_HEIGHT}"
+          ;;
+      esac
+      log "Final HLS args: ${ARGS[*]}"
+    fi
+  fi
 
   if [[ "$HAS_TS_INPUT" == "1" && "$HAS_MKV_OUTPUT" == "1" ]]; then
     dest="${ARGS[-1]}"
@@ -265,7 +302,6 @@ main(){
     log "Starting remux operation: $(basename "${base_args[-1]}" .ts) -> $(basename "$dest")"
 
     # Check available disk space before starting remux
-    # Extract directory from destination path
     dest_dir="$(dirname "$dest")"
     available_space=$(df "$dest_dir" 2>/dev/null | awk 'NR==2 {print $4}')  # Available in 1K blocks
     available_gb=$((available_space / 1024 / 1024))  # Convert to GB
@@ -340,9 +376,6 @@ main(){
       "$dest"
     )
 
-    # Run with 30-minute timeout for remux operation
-    # Note: Must inline ffmpeg call instead of using run_ffmpeg() function,
-    # because timeout cannot execute shell functions (only binary executables)
     if [[ "${SAW_NET_INPUT}" == "1" ]]; then
       log "Executing remux (strategy 2): timeout 1800 ${FFMPEG_REAL} ${NET_FLAGS[*]} ... ${preserve_args[-1]}"
       set +e
@@ -396,9 +429,6 @@ main(){
       "$dest"
     )
 
-    # Run with 30-minute timeout for remux operation
-    # Note: Must inline ffmpeg call instead of using run_ffmpeg() function,
-    # because timeout cannot execute shell functions (only binary executables)
     if [[ "${SAW_NET_INPUT}" == "1" ]]; then
       log "Executing remux (strategy 3): timeout 1800 ${FFMPEG_REAL} ${NET_FLAGS[*]} ... ${transcode_args[-1]}"
     else
@@ -428,11 +458,19 @@ main(){
   DURATION_MS=$(( (END_TIME - START_TIME) / 1000000 ))
   log "Wrapper initialization took ${DURATION_MS}ms before launching ffmpeg"
 
+  # For catch-up downloads, add -readrate 0 to download at full speed
+  # (ffmpeg 8.0+ defaults to ~1x real-time for MPEG-TS network streams)
+  READRATE_FLAGS=()
+  if [[ "${IS_CATCHUP}" == "1" ]]; then
+    READRATE_FLAGS=( -readrate 0 )
+    log "Adding -readrate 0 for full-speed catch-up download"
+  fi
+
   # Run ffmpeg as child process (not exec) so wrapper stays alive
   # This allows Snappier to detect successful process spawn and log callbacks
   if [[ "${SAW_NET_INPUT}" == "1" ]]; then
-    log "Executing: ${FFMPEG_REAL} ${NET_FLAGS[*]} ${ARGS[*]}"
-    "${FFMPEG_REAL}" "${NET_FLAGS[@]}" "${ARGS[@]}"
+    log "Executing: ${FFMPEG_REAL} ${READRATE_FLAGS[*]} ${NET_FLAGS[*]} ${ARGS[*]}"
+    "${FFMPEG_REAL}" "${READRATE_FLAGS[@]}" "${NET_FLAGS[@]}" "${ARGS[@]}"
     exit $?
   else
     # Pure file/local remux path: no extra flags at all

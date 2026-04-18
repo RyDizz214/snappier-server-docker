@@ -1,6 +1,24 @@
+########################################
+# Snappier Server — Base Configuration
+#
+# Pulls the pre-built multi-arch image from GHCR by default. To build locally
+# instead, run: `docker compose build` (uses the bundled Dockerfile).
+#
+# Usage (standalone, no VPN, built-in ffmpeg):
+#   docker compose up -d
+#
+# Usage (with VPN):
+#   docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+#
+# Usage (host ffmpeg, dev only, x86-64):
+#   docker compose -f docker-compose.yml -f docker-compose.host-ffmpeg.yml up -d
+#
+# Or set COMPOSE_FILE in .env to combine overlays automatically.
+########################################
+
 services:
   snappier-server:
-    image: ghcr.io/rydizz214/snappier-server-docker:${SNAPPIER_SERVER_VERSION}
+    image: ghcr.io/rydizz214/snappier-server-docker:${SNAPPIER_IMAGE_TAG:-latest}
     container_name: snappier-server
     restart: unless-stopped
 
@@ -8,39 +26,102 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        SNAPPIER_SERVER_VERSION: "${SNAPPIER_SERVER_VERSION}"
+        SNAPPIER_SERVER_VERSION: "${SNAPPIER_SERVER_VERSION:-1.5.0}"
+        USE_HOST_FFMPEG: "${USE_HOST_FFMPEG:-false}"
+
+    ports:
+      - "127.0.0.1:${HOST_PORT:-7429}:8000"
+      - "127.0.0.1:${NOTIFICATION_HTTP_PORT:-9080}:${NOTIFICATION_HTTP_PORT:-9080}"
 
     env_file:
       - .env
 
-    ports:
-      - "${HOST_PORT}:${PORT}"
-      - "${NOTIFICATION_HTTP_PORT}:${NOTIFICATION_HTTP_PORT}"
-      - "${NOTIFICATION_WS_PORT}:${NOTIFICATION_WS_PORT}"
-
     environment:
-      USE_CURL_TO_DOWNLOAD:     "${USE_CURL_TO_DOWNLOAD}"
-      DOWNLOAD_SPEED_LIMIT_MBS: "${DOWNLOAD_SPEED_LIMIT_MBS}"
+      TZ: "${TZ:-UTC}"
+      PORT: "8000"
+      SNAPPIER_DOMAIN: "${SNAPPIER_DOMAIN:-snappier.local}"
+      SNAPPIER_API_TOKEN: "${SNAPPIER_API_TOKEN:-}"
+      LOG_ROTATE_ENABLED: "0"
 
-      # Optional notification webhooks
-      #PUSHOVER_USER:            "${PUSHOVER_USER}"
-      #PUSHOVER_API:             "${PUSHOVER_API}"
-      #NTFY_TOPIC:               "${NTFY_TOPIC}"
-      #TELEGRAM_TOKEN:           "${TELEGRAM_TOKEN}"
-      #TELEGRAM_CHAT_ID:         "${TELEGRAM_CHAT_ID}"
-      #DISCORD_WEBHOOK_URL:      "${DISCORD_WEBHOOK_URL}"
+      # EPG
+      ENABLE_EPG: "${ENABLE_EPG:-1}"
+      EPG_URLS_JSON: "${EPG_URLS_JSON:-}"
+      EPG_INTERVAL_HOURS: "${EPG_INTERVAL_HOURS:-6}"
+
+      # Recording / download
+      ENABLE_REMUX: "${ENABLE_REMUX:-0}"
+      USE_CURL_TO_DOWNLOAD: "${USE_CURL_TO_DOWNLOAD:-false}"
+      DOWNLOAD_SPEED_LIMIT_MBS: "${DOWNLOAD_SPEED_LIMIT_MBS:-0}"
+      RECORDING_NOTIFY_URL: "http://127.0.0.1:9080/notify"
+
+      # Catch-up extension
+      CATCHUP_EXTENSION_ENABLED: "${CATCHUP_EXTENSION_ENABLED:-1}"
+      CATCHUP_BUFFER_SECONDS: "${CATCHUP_BUFFER_SECONDS:-300}"
+
+      # Node.js heap (for large EPG merges)
+      PKG_NODE_OPTIONS: "--max-old-space-size=16384"
+      NODE_OPTIONS: "--max-old-space-size=16384"
+
+      # Notification webhook
+      NOTIFICATION_HTTP_PORT: "${NOTIFICATION_HTTP_PORT:-9080}"
+      NOTIFICATION_SSE_PATH: "${NOTIFICATION_SSE_PATH:-/events}"
+
+      # Pushover
+      PUSHOVER_USER_KEY: "${PUSHOVER_USER_KEY:-}"
+      PUSHOVER_APP_TOKEN: "${PUSHOVER_APP_TOKEN:-}"
+
+      # TMDB enrichment
+      TMDB_ENABLED: "${TMDB_ENABLED:-1}"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      TMDB_CACHE_MAX_SIZE: "${TMDB_CACHE_MAX_SIZE:-500}"
+      TMDB_TIMEOUT: "${TMDB_TIMEOUT:-3}"
+
+      # Health watcher
+      HEALTH_INTERVAL_SEC: "${HEALTH_INTERVAL_SEC:-30}"
+      HEALTH_FAIL_THRESHOLD: "${HEALTH_FAIL_THRESHOLD:-3}"
+      HEALTH_WARN_COOLDOWN_SEC: "${HEALTH_WARN_COOLDOWN_SEC:-300}"
+      HEALTH_HTTP_TIMEOUT: "${HEALTH_HTTP_TIMEOUT:-5}"
+      HEALTH_EXPECT_MIN: "${HEALTH_EXPECT_MIN:-200}"
+      HEALTH_EXPECT_MAX: "${HEALTH_EXPECT_MAX:-399}"
+      HEALTH_WARN_ON_RECOVERY: "${HEALTH_WARN_ON_RECOVERY:-0}"
+      HEALTH_NOTIFY_URL: "${HEALTH_NOTIFY_URL:-http://127.0.0.1:9080/notify}"
+      HEALTH_ENDPOINT: "${HEALTH_ENDPOINT:-/serverStats}"
+      SNAPPY_API_BASE: "${SNAPPY_API_BASE:-https://127.0.0.1:8000}"
+      SNAPPY_API_TIMEOUT: "${SNAPPY_API_TIMEOUT:-5}"
+
+      # Notification display
+      NOTIFY_TITLE_PREFIX: "${NOTIFY_TITLE_PREFIX:-Snappier}"
+      NOTIFY_DESC_LIMIT: "${NOTIFY_DESC_LIMIT:-900}"
+
+      # FFmpeg wrapper log
+      FFMPEG_WRAPPER_LOG: "/root/SnappierServer/logs/ffmpeg_wrapper.log"
 
     volumes:
-      - /data/recordings/snappier-server/Recordings:/root/SnappierServer/Recordings
-      - /data/recordings/snappier-server/Movies:/root/SnappierServer/Movies
-      - /data/recordings/snappier-server/TVSeries:/root/SnappierServer/TVSeries
-      - /data/recordings/snappier-server/PVR:/root/SnappierServer/PVR
-      - /data/recordings/snappier-server/epg:/root/SnappierServer/epg
-      - /data/recordings/snappier-server/Recordings/schedules.json:/root/SnappierServer/Recordings/schedules.json
-      - /data/recordings/snappier-server/server.log:/root/SnappierServer/server.log
+      # Host path root for persistent data. Override DATA_DIR in .env
+      # (defaults to ./data beside docker-compose.yml).
+      - ${DATA_DIR:-./data}/Recordings:/root/SnappierServer/Recordings
+      - ${DATA_DIR:-./data}/Movies:/root/SnappierServer/Movies
+      - ${DATA_DIR:-./data}/TVSeries:/root/SnappierServer/TVSeries
+      - ${DATA_DIR:-./data}/PVR:/root/SnappierServer/PVR
+      - ${DATA_DIR:-./data}/epg:/root/SnappierServer/epg
+      - ${DATA_DIR:-./data}/certs:/opt/SnappierServer/certs:ro
+      - ${DATA_DIR:-./data}/logs:/root/SnappierServer/logs
+      - ${DATA_DIR:-./data}/config.json:/root/SnappierServer/config.json
+
+    extra_hosts:
+      - "${SNAPPIER_DOMAIN:-snappier.local}:127.0.0.1"
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:${PORT}/serverStats"]
-      interval: 60s
-      timeout: 5s
+      test:
+        - CMD
+        - bash
+        - -c
+        - timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/8000' 2>/dev/null
+      interval: 30s
+      timeout: 8s
       retries: 3
+      start_period: 25s
+
+networks:
+  default:
+    enable_ipv6: false
