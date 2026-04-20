@@ -14,7 +14,7 @@
 #     --push -t ghcr.io/<you>/snappier-server:1.5.0 .       # multi-arch publish
 ########################################
 
-ARG SNAPPIER_SERVER_VERSION=1.5.0
+ARG SNAPPIER_SERVER_VERSION=1.5.1-1
 ARG USE_HOST_FFMPEG=false
 
 ########################################
