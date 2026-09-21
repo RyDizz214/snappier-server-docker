@@ -24,7 +24,10 @@ ARG USE_HOST_FFMPEG=false
 FROM ubuntu:25.04 AS ffmpeg-build
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG FFMPEG_VERSION=latest
+# Pinned rather than "latest" so a release builds the same FFmpeg every time.
+# 8.1.2 is the version this image's ffmpeg-wrapper.sh is tested against.
+# Setting FFMPEG_VERSION=latest restores resolving the newest stable tarball.
+ARG FFMPEG_VERSION=8.1.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates wget unzip xz-utils grep coreutils \
