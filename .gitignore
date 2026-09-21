@@ -34,3 +34,9 @@ build.log
 *_BUG_FIX_SUMMARY.html
 FEATURE_REQUEST_*.md
 RELEASE_NOTES_*.md
+.pia.creds
+scripts/pia-ca.rsa.4096.crt
+backups_.env.before-pia-rekey-*
+
+# Host-specific VPN key rotation (PIA credentials, not portable)
+scripts/snappier-pia-rekey.sh

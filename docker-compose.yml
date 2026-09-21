@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        SNAPPIER_SERVER_VERSION: "${SNAPPIER_SERVER_VERSION:-1.5.0}"
+        SNAPPIER_SERVER_VERSION: "${SNAPPIER_SERVER_VERSION:-2.0.0-2}"
         USE_HOST_FFMPEG: "${USE_HOST_FFMPEG:-false}"
 
     ports:

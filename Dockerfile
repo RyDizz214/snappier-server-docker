@@ -11,10 +11,10 @@
 #   docker compose build                                    # built-in ffmpeg, native arch
 #   docker compose build --build-arg USE_HOST_FFMPEG=true   # host ffmpeg (x86-64 only)
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     --push -t ghcr.io/<you>/snappier-server:1.5.0 .       # multi-arch publish
+#     --push -t ghcr.io/<you>/snappier-server:2.0.0 .       # multi-arch publish
 ########################################
 
-ARG SNAPPIER_SERVER_VERSION=1.5.1-1
+ARG SNAPPIER_SERVER_VERSION=2.0.0-2
 ARG USE_HOST_FFMPEG=false
 
 ########################################
@@ -86,7 +86,7 @@ RUN git clone --depth=1 https://github.com/xiph/opus.git /tmp/opus \
  && ./configure --prefix=/usr/local --disable-shared \
  && make -j"$(nproc)" && make install
 
-# FFmpeg (latest stable by default; override via FFMPEG_VERSION=8.1 etc.)
+# FFmpeg (pinned via FFMPEG_VERSION above; set it to "latest" to track stable)
 #
 # FFMPEG_REFRESH is a cache-bust token. When FFMPEG_VERSION=latest, set this to
 # the current date (e.g. in CI: --build-arg FFMPEG_REFRESH=$(date +%Y%m%d)) so
