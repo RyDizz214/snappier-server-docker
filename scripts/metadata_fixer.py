@@ -413,31 +413,107 @@ def epg_lookup_channel(programme_name, download_ts="", airtime=None, epg_channel
     return display_name or None, logo_url or None, description or None
 
 
+_RECORDING_EXTS = (".mkv", ".ts", ".mp4")
+
+
 def _find_recording_file(uuid):
-    """Find the actual recording file (mkv/ts/mp4) by UUID across all recording dirs."""
+    """Find the actual recording file (mkv/ts/mp4) by UUID across all recording dirs.
+
+    Returns a recording-media file (.mkv/.ts/.mp4) in preference to sidecars
+    (.txt, .logo.txt, .edl, .log). The is-in-use guard in `_is_file_in_use`
+    only consults `_comskip_active_for_uuid` when the path it gets is `.mkv`;
+    returning a sidecar bypasses the comskip-still-running check and the bulk
+    rename loop then renames the .mkv out from under an active comskip,
+    causing it to fail with "Can not open file" and exit 255 (no .edl).
+    """
+    fallback = None
     for d in RECORDING_DIRS:
         if not os.path.isdir(d):
             continue
         for entry in os.listdir(d):
-            if os.path.isdir(os.path.join(d, entry)):
+            full = os.path.join(d, entry)
+            if os.path.isdir(full):
                 continue
-            if uuid in entry:
-                return os.path.join(d, entry)
-    return None
+            if uuid not in entry:
+                continue
+            if entry.lower().endswith(_RECORDING_EXTS):
+                return full
+            if fallback is None:
+                fallback = full
+    return fallback
+
+
+# Force rename even if comskip looks active, after this many seconds since the
+# .mkv was first seen — bounds the deferral if a comskip process hangs.
+_COMSKIP_DEFER_MAX = 3600
+
+
+def _comskip_active_for_uuid(uuid):
+    """Return True if any /proc cmdline references both `comskip` and this UUID.
+
+    Catches the comskip binary AND the bash wrapper that exec's it, since the
+    full recording path (containing the UUID) is always passed as argv.
+    """
+    if not uuid:
+        return False
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return False
+    needle = uuid.encode()
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read()
+        except (OSError, IOError):
+            continue
+        if not cmd or b"comskip" not in cmd or needle not in cmd:
+            continue
+        return True
+    return False
 
 
 def _is_file_in_use(filepath):
-    """Return True if the recording is still being downloaded or remuxed.
+    """Return True if the recording is still being downloaded, remuxed, or
+    actively processed by comskip.
 
-    A .ts sibling means the download/remux pipeline is still in-flight
-    (the .ts is deleted only after a successful remux).  If the file itself
-    is a .ts, check its mtime — still being written if recent.
+    Reasons to defer rename:
+      1. Download/remux still in-flight — for .mkv this means a .ts sibling
+         exists (deleted only after successful remux).  For .ts itself, the
+         file's mtime is still moving.
+      2. Comskip is currently scanning the .mkv for ad markers — renaming
+         mid-run causes comskip's repeated open() calls to fail with
+         "Can not open file" and it exits 255 (no .edl produced).
+
+    Bounded fallback: if the .mkv has been around for >_COMSKIP_DEFER_MAX
+    seconds, force the rename through to avoid hangs from a stuck comskip.
     """
     base, ext = os.path.splitext(filepath)
     if ext == ".mkv":
-        # Remux is done (.ts deleted) — safe to rename
         ts_sibling = base + ".ts"
-        return os.path.exists(ts_sibling)
+        if os.path.exists(ts_sibling):
+            return True
+        m = _UUID_RE.search(os.path.basename(filepath))
+        if m and _comskip_active_for_uuid(m.group(0)):
+            try:
+                age = time.time() - os.path.getmtime(filepath)
+            except OSError:
+                age = 0
+            if age < _COMSKIP_DEFER_MAX:
+                print(
+                    f"[metadata_fixer] Deferring rename of {os.path.basename(filepath)} "
+                    f"— comskip still active (age {int(age)}s)"
+                )
+                sys.stdout.flush()
+                return True
+            print(
+                f"[metadata_fixer] WARN: comskip still active after "
+                f"{_COMSKIP_DEFER_MAX}s — forcing rename of {os.path.basename(filepath)}"
+            )
+            sys.stdout.flush()
+        return False
     # For .ts files: still in use if recently modified
     try:
         mtime = os.path.getmtime(filepath)
@@ -461,11 +537,21 @@ def _rename_with_channel(filepath, data, channel_name):
     # Build channel prefix: spaces -> underscores for filename
     chan_fs = channel_name.replace(" ", "_")
 
-    # Find and rename the actual recording file
+    # Find and rename the actual recording file (and any UUID-matching sidecars
+    # like .edl from comskip, .txt subtitle/marker files, etc.)
     m = _UUID_RE.search(filename)
     if m:
         uuid = m.group(0)
         rec_path = _find_recording_file(uuid)
+        if rec_path is None:
+            # Recording file not yet visible in the recording dirs — likely the
+            # .ts hasn't been flushed/listed yet (scan can land within seconds
+            # of download start). Defer the meta.json rename too so the next
+            # scan can rename meta + recording together. Otherwise meta.json
+            # gets the channel prefix but the .ts/.mkv stays `--`-prefixed and
+            # `_rename_with_channel` short-circuits forever (meta no longer
+            # passes `_is_catchup_filename`).
+            return filepath
         if rec_path:
             rec_name = os.path.basename(rec_path)
             if _is_catchup_filename(rec_name):
@@ -474,14 +560,23 @@ def _rename_with_channel(filepath, data, channel_name):
                     print(f"[metadata_fixer] Skipping rename of {rec_name} — file still in use (mtime < 90s)")
                     sys.stdout.flush()
                     return filepath
-                # rec_name starts with "--", so chan_fs + rec_name gives "Channel--Program--..."
-                new_rec_name = chan_fs + rec_name
-                new_rec_path = os.path.join(os.path.dirname(rec_path), new_rec_name)
-                try:
-                    os.rename(rec_path, new_rec_path)
-                    print(f"[metadata_fixer] Renamed recording: {rec_name} -> {new_rec_name}")
-                except OSError as e:
-                    print(f"[metadata_fixer] WARN: failed to rename recording: {e}")
+                # Rename ALL files in this directory that match the UUID and have
+                # the catch-up "--" prefix. Comskip writes .edl after the rec is
+                # remuxed, and may land before or after this scan; either way we
+                # need to keep all sidecars on the same stem as the recording.
+                rec_dir = os.path.dirname(rec_path)
+                for entry in os.listdir(rec_dir):
+                    if uuid not in entry or not _is_catchup_filename(entry):
+                        continue
+                    new_entry = chan_fs + entry
+                    try:
+                        os.rename(
+                            os.path.join(rec_dir, entry),
+                            os.path.join(rec_dir, new_entry),
+                        )
+                        print(f"[metadata_fixer] Renamed: {entry} -> {new_entry}")
+                    except OSError as e:
+                        print(f"[metadata_fixer] WARN: failed to rename {entry}: {e}")
 
     # Rename the metadata file itself
     # filename: --Program--ts----uuid.ts.meta.json -> Channel--Program--ts----uuid.ts.meta.json
@@ -709,6 +804,82 @@ def scan():
     return fixed, len(files)
 
 
+def recover_orphan_sidecars():
+    """Rename late-arriving orphan sidecars to match their renamed recording.
+
+    When comskip (or any async post-processor) writes its output AFTER
+    metadata_fixer has already renamed the .mkv, the new file lands on the
+    legacy `--<program>` stem and is never picked up by the main rename pass
+    (which is keyed off the .meta.json filepath, already renamed).
+
+    For each catchup-prefixed file (`--*`) with a UUID, look for a sibling
+    file with the SAME uuid carrying a `<Channel_Name>--*` prefix. If found,
+    rebase the orphan to the same prefix.
+
+    The prefix map is built GLOBALLY across all recording dirs AND the
+    metadata dir, because the renamed sibling may live in `metaData/` (the
+    `.meta.json`) while the orphans live in the parent recordings dir — e.g.
+    when the recording file wasn't yet visible at the scan tick that renamed
+    the meta.json.
+    """
+    # Build uuid -> channel-prefix map across ALL relevant dirs
+    prefix_by_uuid = {}
+    scan_dirs = list(RECORDING_DIRS) + [METADATA_DIR]
+    for d in scan_dirs:
+        if not os.path.isdir(d):
+            continue
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.startswith("--"):
+                continue
+            m = _UUID_RE.search(entry)
+            if not m:
+                continue
+            uuid = m.group(0).lower()
+            idx = entry.find("--")
+            if idx <= 0:
+                continue
+            prefix = entry[:idx]
+            if uuid not in prefix_by_uuid or len(prefix) < len(prefix_by_uuid[uuid]):
+                prefix_by_uuid[uuid] = prefix
+
+    renamed = 0
+    for d in RECORDING_DIRS:
+        if not os.path.isdir(d):
+            continue
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        # Rename orphans
+        for entry in entries:
+            if not entry.startswith("--"):
+                continue
+            m = _UUID_RE.search(entry)
+            if not m:
+                continue
+            uuid = m.group(0).lower()
+            prefix = prefix_by_uuid.get(uuid)
+            if not prefix:
+                continue
+            full_path = os.path.join(d, entry)
+            if entry.endswith((".ts", ".mkv")) and _is_file_in_use(full_path):
+                continue
+            new_entry = prefix + entry
+            try:
+                os.rename(full_path, os.path.join(d, new_entry))
+                print(f"[metadata_fixer] Recovered orphan sidecar: {entry} -> {new_entry}")
+                sys.stdout.flush()
+                renamed += 1
+            except OSError as e:
+                print(f"[metadata_fixer] WARN: failed to recover {entry}: {e}")
+                sys.stdout.flush()
+    return renamed
+
+
 def main():
     print(f"[metadata_fixer] Started — scanning {METADATA_DIR} every {SCAN_INTERVAL}s")
     sys.stdout.flush()
@@ -721,6 +892,10 @@ def main():
                 if fixed > 0:
                     print(f"[metadata_fixer] Scan complete: fixed {fixed}/{total} files")
                     sys.stdout.flush()
+
+                # Recover orphan sidecars (e.g. .edl from comskip running after
+                # the .mkv was already renamed). Cheap to run every scan.
+                recover_orphan_sidecars()
 
                 # Clean up orphaned metadata every 5th scan (~5 min)
                 scan_count += 1
