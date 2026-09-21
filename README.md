@@ -5,6 +5,10 @@ an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
 Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
 required.
 
+Ships Snappier Server CLI **2.0.0-2** and FFmpeg **8.1.2**. See
+[CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
+renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.
+
 ---
 
 ## Install (5 minutes)
@@ -70,7 +74,7 @@ docker logs snappier-server | grep -i token
 
 Everything below is already in the image — no extra setup needed:
 
-- **FFmpeg** (built from the latest source with x264/x265/fdk-aac/vpx/opus).
+- **FFmpeg 8.1.2** (built from source with x264/x265/fdk-aac/vpx/opus).
   **You do NOT need to install FFmpeg on the host** — it's inside the
   container.
 - **Recording optimisations:** smart HLS playback, catch-up (timeshift)
@@ -79,6 +83,8 @@ Everything below is already in the image — no extra setup needed:
   Pushover keys to get push notifications on your phone (see below).
 - **Background helpers** that keep metadata tidy, monitor health, and cache
   provider data.
+- **Comskip** for commercial detection on finished recordings, writing `.edl`
+  sidecars that players use to skip breaks. Off by default — see below.
 
 ---
 
@@ -92,6 +98,8 @@ Edit `.env` and uncomment / fill in these:
 | A different web port                  | `HOST_PORT=8080` *(default is 7429)*                        |
 | Your IPTV provider's EPG (TV guide)   | `EPG_URLS_JSON=[{...}]` *(see comments in example.env)*     |
 | Push notifications on your phone      | `PUSHOVER_USER_KEY=…` and `PUSHOVER_APP_TOKEN=…`            |
+| Commercial skipping on recordings     | `ENABLE_COMSKIP=true` *(CPU-heavy; takes minutes per recording)* |
+| Longer catch-up safety margin         | `CATCHUP_BUFFER_MINUTES=10` *(default is 5)*                 |
 | Posters & descriptions in notifications | `TMDB_API_KEY=…` *(free key from themoviedb.org; enriches notification messages only — Snappier still records fine without it)* |
 
 After any change to `.env`, restart:
