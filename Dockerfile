@@ -181,18 +181,26 @@ WORKDIR /opt
 RUN mkdir -p /logs /root/SnappierServer/epg /root/SnappierServer /opt/certs
 
 # Download Snappier CLI artifact (per-arch via buildx TARGETARCH)
+#
+# Upstream publishes under a per-version directory (files/v<VER>/<file>). The
+# flat files/<file> form this used to build 404s for every version, so the
+# fetch below is the only supported layout — do not "simplify" it back.
+# The published .sha256 is verified before the archive is trusted.
 RUN set -eux; \
   SNAPPIER_ARCH="$(cat /tmp/snappier_arch)"; \
-  APP_URL="https://snappierserver.app/files/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}.zip"; \
-  echo "Downloading SnappierServer from: ${APP_URL}"; \
-  curl -fsSL -o /tmp/snappier.zip "${APP_URL}"; \
+  ZIP_NAME="snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}.zip"; \
+  BASE_URL="https://snappierserver.app/files/v${SNAPPIER_SERVER_VERSION}"; \
+  echo "Downloading SnappierServer from: ${BASE_URL}/${ZIP_NAME}"; \
+  curl -fsSL -o "/tmp/${ZIP_NAME}" "${BASE_URL}/${ZIP_NAME}"; \
+  curl -fsSL -o "/tmp/${ZIP_NAME}.sha256" "${BASE_URL}/${ZIP_NAME}.sha256"; \
+  (cd /tmp && sha256sum -c "${ZIP_NAME}.sha256"); \
   mkdir -p /opt/SnappierServer; \
-  unzip -q /tmp/snappier.zip -d /opt/SnappierServer; \
-  rm -f /tmp/snappier.zip; \
+  unzip -q "/tmp/${ZIP_NAME}" -d /opt/SnappierServer; \
+  rm -f "/tmp/${ZIP_NAME}" "/tmp/${ZIP_NAME}.sha256"; \
   find /opt/SnappierServer -maxdepth 2 -type f \( -name "*.sh" -o -name "snappier*" -o -name "*.bin" \) -exec chmod +x {} + || true; \
-  if [ -f "/opt/SnappierServer/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}" ]; then \
-    ln -sf "snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}" /opt/SnappierServer/snappier-server-cli; \
-  fi; \
+  test -f "/opt/SnappierServer/snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}"; \
+  ln -sf "snappier-server-cli-v${SNAPPIER_SERVER_VERSION}-${SNAPPIER_ARCH}" /opt/SnappierServer/snappier-server-cli; \
+  test -x /opt/SnappierServer/snappier-server-cli; \
   ln -sf /opt/SnappierServer /root/SnappierServer; \
   echo '{}' > /opt/SnappierServer/config.json; \
   { \
