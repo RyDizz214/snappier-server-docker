@@ -1436,8 +1436,72 @@ while IFS= read -r line; do
       append_stream_meta args "$uuid"
       post_action "$action" "${args[@]}"
       set_job_status "$uuid" "$action"
+
+      # Clean up schedules.json for live recordings — movies/series have their
+      # own SaveMovie / SaveTVSeries handlers that do this; live recordings don't.
+      if [[ "$kind" == "recording" && ( "$action" == "recording_completed" || "$action" == "recording_failed" ) ]]; then
+        log "$action: cleaning up schedule entry for job $uuid"
+        delete_schedule_entry "$uuid"
+      fi
+
+      # Fire metadata_fixer scan synchronously on catchup/movie/series
+      # completion so the channel-prefixed rename lands immediately instead
+      # of waiting up to 60s for the next polling tick. Backgrounded so it
+      # cannot block log_monitor's main loop.
+      if [[ "$action" == "catchup_completed" || "$action" == "movie_completed" || "$action" == "series_completed" ]]; then
+        log "$action: triggering immediate metadata_fixer scan for $uuid"
+        (
+          python3 -c "
+import sys
+sys.path.insert(0, '/opt/scripts')
+from metadata_fixer import scan, recover_orphan_sidecars
+scan()
+recover_orphan_sidecars()
+" 2>&1 | while IFS= read -r line; do log "[metadata_fixer-trigger] $line"; done
+        ) &
+        disown 2>/dev/null || true
+      fi
     fi
 
+    update_size; continue
+  fi
+
+  # 5b) Comskip finished -> notify on commercial-detection completion/failure
+  # (mirrors uhf-server 2.0.0's per-recording push notification when comskip finishes)
+  if [[ "$line" =~ \[comskip\]\ finished\ (.+\.mkv)\ code=([0-9]+)\ edl=(true|false) ]]; then
+    file="${BASH_REMATCH[1]}"; code="${BASH_REMATCH[2]}"; edl="${BASH_REMATCH[3]}"
+
+    declare -A M=()
+    while IFS='=' read -r k v; do M["$k"]="$v"; done < <(parse_ts_meta "$file")
+    uuid="${M[uuid]:-}"
+    program="${M[program]:-}"
+    channel="${M[channel]:-}"
+
+    if [[ -n "$uuid" ]]; then
+      if [[ -z "$program" || "${program,,}" == "unknown" ]]; then
+        program="${JOB_PROGRAM[$uuid]:-$program}"
+      fi
+      if [[ -z "$channel" || "${channel,,}" == "unknown" ]]; then
+        channel="${JOB_CHANNEL[$uuid]:-$channel}"
+      fi
+    fi
+    [[ -n "$channel" ]] && channel="$(clean_channel "$channel")"
+
+    if [[ "$code" == "0" ]]; then
+      action="comskip_completed"
+    else
+      action="comskip_failed"
+    fi
+
+    declare -a payload_args=(exit_code "$code" edl "$edl" file "$file")
+    if [[ -n "$uuid" ]]; then
+      payload_args+=(job_id "$(shorten_job "$uuid")" job_id_full "$uuid")
+    fi
+    [[ -n "$program" ]] && payload_args+=(program "$program")
+    [[ -n "$channel" ]] && payload_args+=(channel "$channel")
+
+    post_action "$action" "${payload_args[@]}"
+    log "comskip finished: file=$file code=$code edl=$edl action=$action"
     update_size; continue
   fi
 
@@ -1606,6 +1670,8 @@ while IFS= read -r line; do
     remember_job "$job" "recording" "$program" "$channel"
     post_action "recording_cancelled" job_id "$(shorten_job "$job")" job_id_full "$job" exit_code "$code" program "$program" channel "$channel"
     set_job_status "$job" "recording_cancelled"
+    log "recording_cancelled: cleaning up schedule entry for job $job"
+    delete_schedule_entry "$job"
     update_size; continue
   fi
 
