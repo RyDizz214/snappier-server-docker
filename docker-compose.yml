@@ -56,7 +56,7 @@ services:
 
       # Catch-up extension
       CATCHUP_EXTENSION_ENABLED: "${CATCHUP_EXTENSION_ENABLED:-1}"
-      CATCHUP_BUFFER_SECONDS: "${CATCHUP_BUFFER_SECONDS:-300}"
+      CATCHUP_BUFFER_MINUTES: "${CATCHUP_BUFFER_MINUTES:-5}"
 
       # Node.js heap (for large EPG merges)
       PKG_NODE_OPTIONS: "--max-old-space-size=16384"

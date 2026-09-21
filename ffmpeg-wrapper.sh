@@ -5,7 +5,7 @@ set -euo pipefail
 
 # Catch-up download extension
 CATCHUP_EXTENSION_ENABLED="${CATCHUP_EXTENSION_ENABLED:-1}"
-CATCHUP_BUFFER_SECONDS="${CATCHUP_BUFFER_SECONDS:-180}"  # 3 minutes default
+CATCHUP_BUFFER_MINUTES="${CATCHUP_BUFFER_MINUTES:-5}"
 
 # Network flags (only flags snappier-server doesn't already pass)
 # Snappier natively sets: -reconnect 1, -reconnect_streamed 1, -reconnect_at_eof 1, -reconnect_delay_max 2
@@ -33,17 +33,23 @@ log(){
   fi
 }
 
+# Warn loudly if the pre-2.0.0 name is still set. Falling back to the default
+# silently would quietly change every catch-up download length.
+if [[ -n "${CATCHUP_BUFFER_SECONDS:-}" ]]; then
+  log "WARNING: CATCHUP_BUFFER_SECONDS is no longer read (removed in 2.0.0)." \
+      "Use CATCHUP_BUFFER_MINUTES instead — currently ${CATCHUP_BUFFER_MINUTES} minute(s)."
+fi
+
 # -------- Helpers --------
 is_http_like(){ [[ "$1" == http://* || "$1" == https://* ]]; }
 is_progress_flag(){ [[ "$1" == "-progress" || "$1" == "--progress" ]]; }
 
 # -------- HLS live-playback optimisation --------
 # Snappier >= 1.5 transcodes ALL live streams (libx264/libfdk_aac) for dashboard
-# HLS playback.  This is only needed for H.265/HEVC sources (browsers can't play
-# them).  For H.264 sources we switch to -c copy (near-zero CPU).  For H.265 we
-# keep the transcode but add ultrafast + 1080p downscale.
+# HLS playback.  For H.264 sources we switch to -c copy (near-zero CPU) since
+# the source is already browser-playable.  Non-H.264 sources keep Snappier's
+# transcode args unchanged.
 HLS_OPTIMIZE_ENABLED="${HLS_OPTIMIZE_ENABLED:-1}"
-HLS_MAX_HEIGHT="${HLS_MAX_HEIGHT:-1080}"
 # Use the ffprobe shim (not FFPROBE_REAL which points to the raw host binary
 # that can't run without ld-linux wrapper)
 FFPROBE_CMD="/usr/local/bin/ffprobe"
@@ -103,33 +109,39 @@ rewrite_hls_to_copy(){
   ARGS=("${new_args[@]}")
 }
 
-# Rewrite for non-H.264 source: keep transcode, add ultrafast preset,
-# and only downscale if source height > HLS_MAX_HEIGHT.
-# Usage: optimize_hls_transcode <source_height>
-optimize_hls_transcode(){
-  local source_height="${1:-0}"
-  local needs_scale=0
-  [[ "$source_height" -gt "${HLS_MAX_HEIGHT}" ]] 2>/dev/null && needs_scale=1
+# Safety net for transcode-to-libx264 paths: when Snappier emits a barebones
+# transcode command (no -preset, no -vf scale), inject sane defaults so ffmpeg
+# can keep up with high-resolution sources.  Without this, cold-start cases
+# where Snappier hasn't yet identified the source codec produce a libx264
+# transcode at the default "medium" preset, which can't keep up with 4K HEVC
+# inputs — segments don't appear in time and the browser sees a manifest error.
+# scale=-2:'min(1080,ih)' caps height at 1080 without ever upscaling.
+ensure_transcode_safety_flags(){
+  local has_preset=0 has_scale=0 has_libx264=0
+  local i=0
+  while [[ $i -lt ${#ARGS[@]} ]]; do
+    [[ "${ARGS[$i]}" == "-preset" ]] && has_preset=1
+    [[ "${ARGS[$i]}" == "-vf" ]] && has_scale=1
+    [[ "${ARGS[$i]}" == "-c:v" && "${ARGS[$((i+1))]:-}" == "libx264" ]] && has_libx264=1
+    i=$((i+1))
+  done
+
+  [[ "$has_libx264" == "0" ]] && return 0
+  [[ "$has_preset" == "1" && "$has_scale" == "1" ]] && return 0
 
   local new_args=()
-  local has_preset=0 has_scale=0
-  for arg in "${ARGS[@]}"; do
-    [[ "$arg" == "-preset" ]] && has_preset=1
-    [[ "$arg" == "-vf" ]] && has_scale=1
-  done
-  local i=0
+  i=0
   while [[ $i -lt ${#ARGS[@]} ]]; do
     local arg="${ARGS[$i]}"
     local next="${ARGS[$((i+1))]:-}"
-    if [[ "$arg" == "-c:v" && "$next" == "libx264" && "$has_preset" == "0" ]]; then
-      new_args+=("-c:v" "libx264" "-preset" "ultrafast")
-      i=$((i+2)); continue
-    fi
-    if [[ "$arg" == "-f" && "$next" == "hls" && "$has_scale" == "0" && "$needs_scale" == "1" ]]; then
-      new_args+=("-vf" "scale=-2:${HLS_MAX_HEIGHT}:flags=fast_bilinear")
-      has_scale=1
-    fi
     new_args+=("$arg")
+    if [[ "$arg" == "-c:v" && "$next" == "libx264" ]]; then
+      new_args+=("$next")
+      [[ "$has_preset" == "0" ]] && new_args+=("-preset" "ultrafast")
+      [[ "$has_scale" == "0" ]] && new_args+=("-vf" "scale=-2:'min(1080,ih)':flags=fast_bilinear")
+      i=$((i+2))
+      continue
+    fi
     i=$((i+1))
   done
   ARGS=("${new_args[@]}")
@@ -148,73 +160,23 @@ is_catchup_download(){
   return 1
 }
 
-extend_duration(){
-  # Extend -t (duration) argument by CATCHUP_BUFFER_SECONDS
-  local duration="$1"
-  local buffer="${CATCHUP_BUFFER_SECONDS}"
-
-  python3 - "$duration" "$buffer" <<'PY'
-import sys, re
-
-duration_str = sys.argv[1]
-buffer_sec = int(sys.argv[2])
-
-# Parse various duration formats:
-# - Seconds: "3600"
-# - HH:MM:SS: "01:00:00"
-# - HH:MM:SS.mmm: "01:00:00.500"
-
-# Try parsing as pure seconds first
-try:
-    duration_sec = float(duration_str)
-    new_duration = duration_sec + buffer_sec
-    print(f"{new_duration:.3f}")
-    raise SystemExit(0)
-except ValueError:
-    pass
-
-# Try parsing HH:MM:SS or HH:MM:SS.mmm
-time_match = re.match(r'^(\d+):(\d+):(\d+)(?:\.(\d+))?$', duration_str)
-if time_match:
-    hours = int(time_match.group(1))
-    minutes = int(time_match.group(2))
-    seconds = int(time_match.group(3))
-    milliseconds = int(time_match.group(4) or 0)
-
-    total_sec = hours * 3600 + minutes * 60 + seconds + buffer_sec
-    new_hours = total_sec // 3600
-    new_minutes = (total_sec % 3600) // 60
-    new_seconds = total_sec % 60
-
-    if milliseconds:
-        print(f"{new_hours:02d}:{new_minutes:02d}:{new_seconds:02d}.{milliseconds}")
-    else:
-        print(f"{new_hours:02d}:{new_minutes:02d}:{new_seconds:02d}")
-    raise SystemExit(0)
-
-# Couldn't parse, return original
-print(duration_str)
-PY
-}
-
 # Modify timeshift URL to request more minutes for catch-up buffer
 # Format: .../timeshift/.../MINUTES/DATE-TIME/segment.ts
 # Changes: /MINUTES/ -> /(MINUTES + BUFFER_MINUTES)/
 extend_timeshift_url(){
   local url="$1"
-  local buffer_minutes=$((CATCHUP_BUFFER_SECONDS / 60))
 
   # Match and extract the duration minutes from the URL pattern
   if [[ "$url" =~ /timeshift/([^/]+)/([^/]+)/([0-9]+)/ ]]; then
     local user="${BASH_REMATCH[1]}"
     local uuid="${BASH_REMATCH[2]}"
     local minutes="${BASH_REMATCH[3]}"
-    local new_minutes=$((minutes + buffer_minutes))
+    local new_minutes=$((minutes + CATCHUP_BUFFER_MINUTES))
 
     # Replace the old duration with new duration in the URL
     local modified_url="${url/\/timeshift\/${user}\/${uuid}\/${minutes}\//\/timeshift\/${user}\/${uuid}\/${new_minutes}\/}"
     echo "$modified_url"
-    log "Extended timeshift: ${minutes}m -> ${new_minutes}m (added ${buffer_minutes}m buffer)"
+    log "Extended timeshift: ${minutes}m -> ${new_minutes}m (added ${CATCHUP_BUFFER_MINUTES}m buffer)"
     return 0
   fi
 
@@ -235,7 +197,7 @@ main(){
   # Check if this is a catch-up download
   if [[ "${CATCHUP_EXTENSION_ENABLED}" == "1" ]] && is_catchup_download "$@"; then
     IS_CATCHUP=1
-    log "Detected catch-up download, extending timeshift buffer by ${CATCHUP_BUFFER_SECONDS}s"
+    log "Detected catch-up download, extending timeshift buffer by ${CATCHUP_BUFFER_MINUTES}m"
   fi
 
   for a in "$@"; do
@@ -245,7 +207,7 @@ main(){
       fi
     fi
 
-    if [[ "$PREV_ARG" == "-i" ]] && [[ "$a" == *.ts ]]; then
+    if [[ "$PREV_ARG" == "-i" ]] && [[ "$a" == *.ts ]] && ! is_http_like "$a"; then
       HAS_TS_INPUT=1
     fi
     if [[ "$a" == *.mkv ]]; then
@@ -254,7 +216,7 @@ main(){
 
     # Modify timeshift URL for catch-up downloads (extend minutes parameter in URL)
     rewritten="$a"
-    if [[ "${IS_CATCHUP}" == "1" ]] && [[ "$PREV_ARG" == "-i" ]] && [[ "$a" =~ /timeshift/ ]]; then
+    if [[ "${IS_CATCHUP}" == "1" ]] && [[ "$PREV_ARG" == "-i" ]]; then
       rewritten="$(extend_timeshift_url "$a")"
     fi
 
@@ -274,19 +236,17 @@ main(){
       log "HLS live playback — source codec: ${SOURCE_CODEC:-unknown}, height: ${SOURCE_HEIGHT:-unknown}"
 
       case "${SOURCE_CODEC}" in
-        h264|"")
-          # H.264 (or probe failed/timed out): remux with -c copy, near-zero CPU
+        h264)
           log "H.264 source — switching to -c copy (remux only)"
           rewrite_hls_to_copy
           ;;
+        "")
+          log "Probe failed — applying transcode safety flags as a precaution"
+          ensure_transcode_safety_flags
+          ;;
         *)
-          # H.265/MPEG-2/etc: keep transcode, add ultrafast, downscale only if > 1080p
-          if [[ "${SOURCE_HEIGHT}" -gt "${HLS_MAX_HEIGHT}" ]] 2>/dev/null; then
-            log "Non-H.264 source (${SOURCE_CODEC} ${SOURCE_HEIGHT}p) — ultrafast + downscale to ${HLS_MAX_HEIGHT}p"
-          else
-            log "Non-H.264 source (${SOURCE_CODEC} ${SOURCE_HEIGHT}p) — ultrafast only (no downscale needed)"
-          fi
-          optimize_hls_transcode "${SOURCE_HEIGHT}"
+          log "Non-H.264 source (${SOURCE_CODEC} ${SOURCE_HEIGHT}p) — ensuring transcode safety flags"
+          ensure_transcode_safety_flags
           ;;
       esac
       log "Final HLS args: ${ARGS[*]}"
