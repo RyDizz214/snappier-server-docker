@@ -14,7 +14,9 @@ set -euo pipefail
 
 SETTLE_DELAY=10  # seconds to wait for gluetun to fully initialize
 
-# Each entry: gluetun_container:dependent_container:compose_dir
+# Each entry: gluetun_container:dependent_container[,dependent_container...]:compose_dir
+# Multiple dependents (comma-separated) are recreated together — use this when
+# several services share the same gluetun netns (e.g. snappier + provider-proxy).
 PAIRS=(
   "snappier-gluetun:snappier-server:/opt/snappier-server"
   "uhf-gluetun:uhf-server:/opt/uhf-server-docker"
@@ -36,44 +38,48 @@ done
 
 reconcile() {
   local gluetun="$1"
-  local dependent="${GLUETUN_TO_DEPENDENT[$gluetun]}"
+  local dependents_csv="${GLUETUN_TO_DEPENDENT[$gluetun]}"
   local compose_dir="${GLUETUN_TO_COMPOSE[$gluetun]}"
 
-  # Check if dependent is running with a stale network reference
+  local -a dependents
+  IFS=',' read -r -a dependents <<< "$dependents_csv"
+
+  cd "$compose_dir"
+
+  # Stale-check uses the first dependent's container. All services attached to
+  # the same gluetun netns go stale together, so checking one is sufficient.
+  local first_service="${dependents[0]}"
+  local first_container
+  first_container=$(docker compose ps -a -q "$first_service" 2>/dev/null | head -n1)
+
   local current_net gluetun_id
-  current_net=$(docker inspect "$dependent" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "unknown")
+  current_net=$(docker inspect "$first_container" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "unknown")
   gluetun_id=$(docker inspect "$gluetun" --format '{{.Id}}' 2>/dev/null || echo "unknown")
 
   if [[ "$current_net" == "container:$gluetun_id" ]]; then
-    log "$dependent already references the current $gluetun container, skipping"
+    log "${dependents[*]} already reference the current $gluetun, skipping"
     return 0
   fi
 
-  log "Stale network detected: $dependent has $current_net, $gluetun is $gluetun_id"
+  log "Stale network detected: $first_service has $current_net, $gluetun is $gluetun_id"
   log "Waiting ${SETTLE_DELAY}s for $gluetun to initialize..."
   sleep "$SETTLE_DELAY"
 
-  # Wait up to 120s for gluetun healthcheck to pass
   for i in $(seq 1 24); do
     local health
     health=$(docker inspect "$gluetun" --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
     if [[ "$health" == "healthy" ]]; then
-      log "$gluetun is healthy, recreating $dependent..."
+      log "$gluetun is healthy, recreating: ${dependents[*]}"
       break
     fi
     log "$gluetun health: $health, waiting... ($i/24)"
     sleep 5
   done
 
-  # Recreate dependent container
-  cd "$compose_dir"
-  if docker compose up -d --force-recreate "$dependent" 2>&1; then
-    log "$dependent recreated successfully"
-    local new_net
-    new_net=$(docker inspect "$dependent" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "unknown")
-    log "New network mode: $new_net"
+  if docker compose up -d --force-recreate "${dependents[@]}" 2>&1; then
+    log "Recreated: ${dependents[*]}"
   else
-    log "ERROR: Failed to recreate $dependent"
+    log "ERROR: Failed to recreate: ${dependents[*]}"
   fi
 }
 
