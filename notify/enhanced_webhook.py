@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-import json, os, time, urllib.parse, re, logging, sys
+import json, os, time, urllib.parse, re, logging, subprocess, sys
 from datetime import datetime, timezone, timedelta
 from collections import OrderedDict
 import httpx
@@ -528,21 +528,20 @@ def _epg_start_digits(raw_start):
 
 
 async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_id=None, provider_source=None):
-    """Direct EPG lookup for catch-up downloads.
+    """Deterministic EPG lookup for recordings.
 
-    If *epg_channel_id* is provided (resolved from Xtream API via stream_id),
-    filters to that exact channel. If *provider_source* is provided (e.g. "Nebula"),
-    digit matching prefers entries from that EPG source to avoid timezone collisions.
-    Falls back to most-recent-before-download.
+    Requires *epg_channel_id* (resolved from Xtream API via stream_id). When
+    *airtime* is given (catch-up timeshift URL), matches the channel programme
+    whose start digits equal the airtime digits. Else, if *download_ts* is
+    given, picks the programme currently airing at that timestamp.
+    *provider_source* (e.g. "Veil") prefers same-source entries when a channel
+    has multiple EPG sources.
     """
-    data, index = await _ensure_epg_index()
-    if not data:
+    if not epg_channel_id:
         return None
 
-    # Strip superscript/modifier markers before normalizing (e.g. ᴸᶦᵛᵉ, ᴺᵉʷ)
-    _title_clean = re.sub(r'[\u02b0-\u02ff\u1d2c-\u1dff\u2070-\u209f]+', '', (title or ''))
-    title_norm = re.sub(r'[^\w\s]', '', _title_clean.strip().lower()).strip()
-    if not title_norm:
+    data, index = await _ensure_epg_index()
+    if not data:
         return None
 
     air_digits = _parse_airtime_digits(airtime)
@@ -551,32 +550,14 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
         return None
 
     by_channel = index.get('by_channel', {})
-    by_title_idx = index.get('by_title', {})
 
-    # Build candidate sets using indexes instead of scanning all 1.4M programmes
-    candidate_sets = []
-    if epg_channel_id:
-        chan_progs = by_channel.get(epg_channel_id.lower(), [])
-        if chan_progs:
-            # Try title match first (substring)
-            channel_filtered = [
-                ev for ev in chan_progs
-                if title_norm in re.sub(r'[\u02b0-\u02ff\u1d2c-\u1dff\u2070-\u209f]+', '',
-                    re.sub(r'[^\w\s]', '', _str(ev.get('title')).strip().lower())).strip()
-            ]
-            if channel_filtered:
-                candidate_sets.append(channel_filtered)
-            elif air_digits is not None:
-                # Fallback: channel + airtime without title filter.
-                # Xtream confirmed the channel and we have exact air time.
-                candidate_sets.append(chan_progs)
-    # Fallback: use title index (O(1) by exact title, much faster than full scan)
-    title_matches = by_title_idx.get(title_norm, [])
-    if title_matches:
-        candidate_sets.append(title_matches)
+    # Deterministic match: only programmes for the resolved channel. No title
+    # fuzzy-matching, no cross-channel fallback.
+    candidates = by_channel.get(epg_channel_id.lower(), [])
+    candidate_sets = [candidates] if candidates else []
 
+    best = None
     for candidates in candidate_sets:
-        best = None
         best_start = None
         best_priority = 999
 
@@ -633,9 +614,9 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
             break
 
     if not best:
-        method = "channel+digits" if epg_channel_id and air_digits else ("digits" if air_digits else "download_ts")
-        logger.debug(f"Catchup EPG lookup ({method}): no match",
-                     f"title={title_norm}, channel={epg_channel_id}, ref={airtime or download_ts}")
+        method = "channel+digits" if air_digits else "channel+download_ts"
+        logger.debug(f"EPG lookup ({method}): no match",
+                     f"channel={epg_channel_id}, ref={airtime or download_ts}")
         return None
 
     meta = dict(best)
@@ -656,6 +637,65 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
                  f"title={_str(best.get('title'))}, "
                  f"start={best.get('start')}, stop={best.get('stop')}")
     return meta
+
+
+def _format_meta_timestamp(raw):
+    """Convert an EPG-style timestamp to 'YYYYMMDDHHMMSS +0000' UTC, matching
+    the format metadata_fixer.py writes for catch-up .meta.json sidecars."""
+    dt = _parse_timestamp(raw)
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S") + " +0000"
+
+
+def _write_recording_meta_json(filepath, channel_name, program_name, meta, epg_data, description, provider_name):
+    """Write a .meta.json sidecar for a completed scheduled/live recording.
+
+    metadata_fixer.py only ever enriches catch-up-style recordings
+    (--Program--TIMESTAMP--UUID); scheduled/live recordings
+    (Channel--Program--START--END--UUID) never get a sidecar from anywhere
+    else, so the CLI's /recordings API returns blank channel_name/
+    programme_name/description for them and the dashboard shows
+    "Uncategorized"/placeholder titles. We already resolve the matching EPG
+    programme here to build the Pushover notification, so persist it too.
+    """
+    try:
+        rec_dir = os.path.dirname(filepath)
+        meta_dir = os.path.join(rec_dir, "metaData")
+        meta_path = os.path.join(meta_dir, os.path.basename(filepath) + ".meta.json")
+        if os.path.exists(meta_path):
+            return  # don't clobber an existing sidecar (e.g. a manual fix)
+
+        chan_key = (meta or {}).get('channel') or ""
+        channels = (epg_data or {}).get('channels') or {}
+        ch_meta = channels.get(chan_key) or {}
+        logo = ch_meta.get('icon') or ""
+        if isinstance(logo, list):
+            logo = logo[0] if logo else ""
+
+        raw_desc = description or (meta or {}).get('desc') or (meta or {}).get('description') or ""
+        if isinstance(raw_desc, dict):
+            raw_desc = raw_desc.get('_') or raw_desc.get('text') or ""
+
+        sidecar = {
+            "channel_name": channel_name or "",
+            "programme_name": program_name or "",
+            "start_time": _format_meta_timestamp((meta or {}).get('start')) or "",
+            "end_time": _format_meta_timestamp((meta or {}).get('stop')) or "",
+            "logo": logo,
+        }
+        if provider_name:
+            sidecar["playlistName"] = provider_name
+        sidecar["description"] = raw_desc if isinstance(raw_desc, str) else ""
+
+        os.makedirs(meta_dir, exist_ok=True)
+        tmp_path = meta_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(sidecar, f, ensure_ascii=False)
+        os.replace(tmp_path, meta_path)
+        logger.info("Wrote recording .meta.json", meta_path)
+    except Exception as e:
+        logger.warning("Failed to write recording .meta.json", f"{filepath}: {e}")
 
 
 async def cache_find_program(channel=None, title=None, start_ts=None, prefer_past=False):
@@ -977,6 +1017,9 @@ _ACTION_MAP = {
     "recording_failed":     {"title": "❗ Recording Failed",           "priority": 1},
     "recording_cancelled":  {"title": "❌ Recording Cancelled",         "priority": 0},
 
+    "comskip_completed":    {"title": "✂️ Commercial Detection Complete", "priority": 0},
+    "comskip_failed":       {"title": "❗ Commercial Detection Failed",    "priority": 1},
+
     "health_warn":          {"title": "❗ Health Warning",             "priority": 1},
     "server_error":         {"title": "❗ Server Error",               "priority": 1},
     "server_failed":        {"title": "❗ Server Failure",             "priority": 1},
@@ -1000,6 +1043,33 @@ def safe_trim(s: str, limit: int) -> str:
 def _as_int(x, default=None):
     try: return int(x)
     except: return default
+
+FFPROBE_BIN = os.environ.get("NOTIFY_FFPROBE", "/usr/local/bin/ffprobe")
+
+def _probe_duration_min(path):
+    """Actual media duration of `path` in whole minutes, or None.
+
+    Blocking — call via asyncio.to_thread.  Used for *_completed notifications
+    because the schedule/EPG window only describes what was *requested*: it
+    misses the ffmpeg-wrapper's catch-up buffer (CATCHUP_BUFFER_MINUTES) and
+    live-recording padding, so start/end arithmetic under-reports the file.
+    """
+    if not path:
+        return None
+    if not os.path.isfile(path):
+        return None
+    try:
+        proc = subprocess.run(
+            [FFPROBE_BIN, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        secs = float((proc.stdout or "").strip())
+    except Exception:
+        return None
+    return int(round(secs / 60)) if secs > 0 else None
 
 @app.post('/notify')
 async def notify(request: Request):
@@ -1255,6 +1325,37 @@ async def notify(request: Request):
         if _fname.startswith("--"):
             _chan_fs = channel_name.replace(" ", "_")
             filepath = _os.path.join(_os.path.dirname(filepath), _chan_fs + _fname)
+
+    # Scheduled/live recordings (Channel--Program--START--END--UUID) have no
+    # other path that ever writes them a .meta.json — see
+    # _write_recording_meta_json for why. Catch-up/movie/series recordings
+    # already get theirs elsewhere (metadata_fixer.py / the VOD catalog).
+    if action == "recording_completed" and filepath and meta:
+        _epg_data, _ = await _ensure_epg_index()
+        await asyncio.to_thread(
+            _write_recording_meta_json, filepath, channel_name, program_name,
+            meta, _epg_data, desc_raw, provider_source_name,
+        )
+
+    # For finished items the real file is the source of truth for length — the
+    # start/end window above is only what was asked for.  Candidates cover the
+    # path as sent, the channel-prefixed name (metadata_fixer may have already
+    # renamed it), and the remuxed .mkv if we were handed the pre-remux .ts.
+    # Only ever raise the number: a still-being-written file probes short, so
+    # a mid-remux race falls back to the window instead of under-reporting.
+    if action.endswith("_completed"):
+        _raw_file = (payload or {}).get("file")
+        _cands = [_c for _c in (_raw_file, filepath) if _c]
+        for _c in list(_cands):
+            if _c.endswith(".ts"):
+                _cands.append(_c[:-3] + ".mkv")
+        for _cand in _cands:
+            _probed = await asyncio.to_thread(_probe_duration_min, _cand)
+            if _probed and (not duration_min or _probed > duration_min):
+                duration_min = _probed
+                logger.debug("Duration from file probe", f"{_probed} min | {_cand}")
+                break
+
     error_msg    = (payload or {}).get("error")
     exit_code    = _as_int((payload or {}).get("exit_code"))
     exit_reason  = (payload or {}).get("exit_reason")
@@ -1373,6 +1474,10 @@ async def notify(request: Request):
         if action in ("recording_completed", "catchup_completed", "movie_completed", "series_completed"):
             if duration_min: tail.append(f"⏱️ {duration_min} min")
             if filepath:     tail.append(f"📁 {filepath}")
+
+        if action == "comskip_completed":
+            edl_flag = str((payload or {}).get("edl", "")).lower()
+            tail.append(f"🎯 Breaks found: {'yes' if edl_flag == 'true' else 'no'}")
 
         if action.endswith("_failed") or action in ("server_error", "server_failed"):
             if error_msg:     tail.append(f"⚠️ {error_msg}")

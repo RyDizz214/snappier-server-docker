@@ -33,10 +33,11 @@ REFRESH_INTERVAL_SEC = int(os.environ.get("XTREAM_CACHE_REFRESH_SEC", "10800")) 
 REQUEST_TIMEOUT = int(os.environ.get("XTREAM_CACHE_TIMEOUT", "30"))
 
 # Cache state
-_cache = {}          # (domain, stream_id_str) → epg_channel_id
-_channel_names = {}  # (domain, stream_id_str) → channel display name
+_cache = {}              # (domain, stream_id_str) -> epg_channel_id
+_channel_names = {}      # (domain, stream_id_str) -> channel display name
+_stream_host_provider = {}  # streaming-URL hostname -> provider name (e.g. "Veil")
 _last_refresh = 0
-_providers = []      # list of {domain, scheme, username, password, name}
+_providers = []          # list of {domain, scheme, username, password, name}
 
 
 def _parse_providers():
@@ -60,8 +61,12 @@ def _parse_providers():
         username = params.get("username", [""])[0]
         password = params.get("password", [""])[0]
         if u.hostname and username and password:
+            # Keep hostname-only as the cache key (log_monitor strips ports
+            # from ffmpeg URLs before lookup). Track netloc separately so the
+            # API fetch preserves any non-default port.
             _providers.append({
                 "domain": u.hostname,
+                "netloc": u.netloc,
                 "scheme": u.scheme or "http",
                 "username": username,
                 "password": password,
@@ -87,7 +92,7 @@ def _fetch_json(url):
 
 def refresh(force=False):
     """Refresh the cache if stale or forced."""
-    global _cache, _channel_names, _last_refresh
+    global _cache, _channel_names, _stream_host_provider, _last_refresh
 
     if not force and _cache and (time.time() - _last_refresh) < REFRESH_INTERVAL_SEC:
         return  # cache is fresh
@@ -100,16 +105,22 @@ def refresh(force=False):
     # This way, if some providers fail, their existing mappings are preserved.
     new_cache = dict(_cache)
     new_names = dict(_channel_names)
+    new_host_provider = dict(_stream_host_provider)
     total = 0
     succeeded = []
     failed = []
 
     for prov in providers:
+        netloc = prov.get("netloc") or prov["domain"]
         api_url = (
-            f"{prov['scheme']}://{prov['domain']}/player_api.php"
+            f"{prov['scheme']}://{netloc}/player_api.php"
             f"?username={prov['username']}&password={prov['password']}"
             f"&action=get_live_streams"
         )
+        # Aliases the cache should also be keyed by for this provider —
+        # populated from any channel whose direct_source streams from a
+        # different hostname than the API endpoint.
+        aliases = set()
         try:
             channels = _fetch_json(api_url)
             if not isinstance(channels, list):
@@ -120,11 +131,26 @@ def refresh(force=False):
                 sid = str(ch.get("stream_id", ""))
                 epg_id = ch.get("epg_channel_id", "")
                 name = ch.get("name", "")
+                ds = ch.get("direct_source") or ""
+                ds_host = None
+                if ds:
+                    try:
+                        ds_host = urlparse(ds).hostname
+                    except Exception:
+                        ds_host = None
+                if ds_host and ds_host != prov["domain"]:
+                    aliases.add(ds_host)
                 if sid and epg_id:
                     new_cache[(prov["domain"], sid)] = epg_id
+                    for alias in aliases:
+                        new_cache[(alias, sid)] = epg_id
                     count += 1
                 if sid and name:
                     new_names[(prov["domain"], sid)] = name
+                    for alias in aliases:
+                        new_names[(alias, sid)] = name
+            for alias in aliases:
+                new_host_provider[alias] = prov["name"]
             total += count
             succeeded.append(f"{prov['name']}({count})")
         except Exception as e:
@@ -133,6 +159,7 @@ def refresh(force=False):
     if new_cache:
         _cache = new_cache
         _channel_names = new_names
+        _stream_host_provider = new_host_provider
         _last_refresh = time.time()
         summary = f"[xtream_cache] Cached {total} stream mappings from {len(succeeded)} providers: {', '.join(succeeded)}"
         if failed:
@@ -167,12 +194,15 @@ def lookup_provider_name(provider_domain):
 
     Returns name (e.g. "Nebula") or None. This matches the 'source' field
     in EPG entries, allowing us to prefer entries from the same provider.
+    Accepts either the configured API host or any streaming host discovered
+    from a channel's direct_source.
     """
     providers = _parse_providers()
     for prov in providers:
         if prov["domain"] == provider_domain:
             return prov["name"]
-    return None
+    # Streaming-host fallback (populated by refresh()).
+    return _stream_host_provider.get(provider_domain)
 
 
 def parse_timeshift_url(wrapper_log_line):
