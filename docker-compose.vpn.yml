@@ -46,8 +46,14 @@ services:
     environment:
       # Only firewall plumbing is pinned here (must match Snappier's port)
       FIREWALL_INPUT_PORTS: "${FIREWALL_INPUT_PORTS:-8000}"
-    extra_hosts:
-      - "${SNAPPIER_DOMAIN:-snappier.local}:127.0.0.1"
+    # Base compose pins SNAPPIER_DOMAIN→127.0.0.1 as an internal hairpin shortcut.
+    # That only works when SNAPPIER_DOMAIN is a placeholder (e.g. snappier.local).
+    # When it's a REAL public hostname, snappier-server's ffmpeg HLS pipeline
+    # tries to fetch https://<real-domain>/recordings/stream/... and lands on
+    # 127.0.0.1:443 inside the gluetun namespace (nothing listening) →
+    # "Connection refused" → manifest never produces segments → playback fails.
+    # Clear it so DNS resolves naturally and the request goes out via VPN/tunnel.
+    extra_hosts: !reset []
     volumes:
       - ./gluetun:/gluetun
     healthcheck:
@@ -68,3 +74,5 @@ services:
     # network_mode: service:X forbids ports/extra_hosts on the joining container
     ports: !reset []
     extra_hosts: !reset []
+    labels:
+      - com.centurylinklabs.watchtower.depends-on=snappier-gluetun
