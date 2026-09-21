@@ -58,6 +58,12 @@ services:
       CATCHUP_EXTENSION_ENABLED: "${CATCHUP_EXTENSION_ENABLED:-1}"
       CATCHUP_BUFFER_MINUTES: "${CATCHUP_BUFFER_MINUTES:-5}"
 
+      # Commercial detection on finished recordings (writes .edl sidecars).
+      # The image builds its own comskip; these point Snappier at it.
+      ENABLE_COMSKIP: "${ENABLE_COMSKIP:-false}"
+      COMSKIP_PATH: "${COMSKIP_PATH:-/usr/local/bin/comskip}"
+      COMSKIP_INI: "${COMSKIP_INI:-/usr/local/etc/comskip.ini}"
+
       # Node.js heap (for large EPG merges)
       PKG_NODE_OPTIONS: "--max-old-space-size=16384"
       NODE_OPTIONS: "--max-old-space-size=16384"

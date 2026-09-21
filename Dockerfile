@@ -117,6 +117,34 @@ RUN set -eux; \
   make -j"$(nproc)" && make install && hash -r
 
 ########################################
+# Stage 1b: Build Comskip from source
+########################################
+# Snappier's --enable-comskip expects a comskip binary, but ships none that
+# runs here: the upstream desktop bundle links against FFmpeg 4.x shared
+# objects that no current container base provides. Build it against this
+# base's own FFmpeg packages instead, and install the matching runtime libs
+# in the final stage. Built on the same ubuntu:25.04 as runtime-base so the
+# libav* ABI agrees.
+FROM ubuntu:25.04 AS comskip-build
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      git ca-certificates build-essential autoconf automake libtool pkg-config \
+      libargtable2-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+      libsdl2-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth=1 https://github.com/erikkaashoek/Comskip.git /tmp/comskip \
+ && cd /tmp/comskip \
+ && ./autogen.sh \
+ && ./configure --bindir=/usr/local/bin \
+ && make -j"$(nproc)" comskip \
+ && install -m 0755 comskip /usr/local/bin/comskip \
+ && test -x /usr/local/bin/comskip
+
+########################################
 # Stage 2: Common runtime base
 ########################################
 FROM ubuntu:25.04 AS runtime-base
@@ -218,6 +246,23 @@ RUN chmod +x /opt/scripts/*.sh 2>/dev/null || true
 COPY ffmpeg-wrapper.sh /usr/local/bin/ffmpeg
 RUN chmod +x /usr/local/bin/ffmpeg \
  && ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg
+
+# Comskip: the real binary from stage 1b, fronted by a wrapper that rebases
+# orphan sidecars as soon as a run finishes. Runtime libav* packages must match
+# the ones comskip was compiled against in stage 1b.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libargtable2-0 libavformat61 libavcodec61 libavutil59 libswscale8 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=comskip-build /usr/local/bin/comskip /usr/local/bin/comskip.real
+COPY scripts/comskip-wrapper.sh /usr/local/bin/comskip
+COPY comskip.ini /usr/local/etc/comskip.ini
+# Smoke-test the ABI, not the exit code: comskip exits 2 even for --help, so a
+# successful run proves nothing. An unresolved libav* symbol would show up here
+# as a "not found" line, which is the failure this stage exists to catch.
+RUN chmod +x /usr/local/bin/comskip /usr/local/bin/comskip.real \
+ && ldd /usr/local/bin/comskip.real \
+ && ! ldd /usr/local/bin/comskip.real | grep -q 'not found'
 
 # Entrypoint
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
