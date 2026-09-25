@@ -504,10 +504,11 @@ def _parse_airtime_digits(airtime_str):
 
     Returns 12-digit string like '202603252000' (YYYYMMDDHHmm) or None.
 
-    IMPORTANT: The timeshift URL encodes air time in the PROVIDER's local timezone
-    (e.g. Nebula uses EDT, Endurance uses UTC). The raw digits match the provider's
-    own EPG start time digits regardless of timezone offset. We compare digits
-    directly rather than converting to epoch, which avoids timezone mismatches.
+    IMPORTANT: The timeshift URL encodes air time in the PROVIDER's server
+    timezone (Xtream server_info.timezone, e.g. Europe/London for Veil and
+    Endurance, UTC for Nebula). Prefer _airtime_epoch() when that timezone is
+    known; raw digits are only a fallback and collide whenever the provider's
+    timezone differs from the EPG entry's offset.
     """
     if not airtime_str:
         return None
@@ -515,6 +516,20 @@ def _parse_airtime_digits(airtime_str):
     if not m:
         return None
     return f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}{m.group(5)}"
+
+
+def _airtime_epoch(airtime_str, tz_name):
+    """Convert a timeshift airtime (YYYY-MM-DD:HH-MM) to a UTC epoch using the
+    provider's IANA timezone. Returns None if either is missing/invalid."""
+    digits = _parse_airtime_digits(airtime_str)
+    if not digits or not tz_name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.strptime(digits, "%Y%m%d%H%M").replace(tzinfo=ZoneInfo(tz_name))
+        return int(dt.timestamp())
+    except Exception:
+        return None
 
 
 def _epg_start_digits(raw_start):
@@ -527,13 +542,15 @@ def _epg_start_digits(raw_start):
     return m.group(1) if m else None
 
 
-async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_id=None, provider_source=None):
+async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_id=None, provider_source=None, provider_tz=None):
     """Deterministic EPG lookup for recordings.
 
     Requires *epg_channel_id* (resolved from Xtream API via stream_id). When
     *airtime* is given (catch-up timeshift URL), matches the channel programme
     whose start digits equal the airtime digits. Else, if *download_ts* is
     given, picks the programme currently airing at that timestamp.
+    *provider_tz* (the provider's server_info.timezone) turns the airtime into
+    an exact instant; without it we fall back to comparing raw digits.
     *provider_source* (e.g. "Veil") prefers same-source entries when a channel
     has multiple EPG sources.
     """
@@ -545,6 +562,7 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
         return None
 
     air_digits = _parse_airtime_digits(airtime)
+    air_epoch = _airtime_epoch(airtime, provider_tz)
     dl_epoch = _normalize_start(download_ts) if download_ts else None
     if not air_digits and dl_epoch is None:
         return None
@@ -557,15 +575,52 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
     candidate_sets = [candidates] if candidates else []
 
     best = None
+    method = None
     for candidates in candidate_sets:
         best_start = None
         best_priority = 999
+
+        # Phase 0 (airtime converted with the provider's timezone) — exact
+        # instant, so immune to EPG sources using a different offset.
+        if air_epoch is not None:
+            best_key = None
+            for ev in candidates:
+                ev_start = _normalize_start(ev.get('start'))
+                if ev_start is None or abs(ev_start - air_epoch) > 120:
+                    continue
+                ev_priority = ev.get('priority', 999)
+                if not isinstance(ev_priority, int):
+                    ev_priority = 999
+                key = (not (provider_source and ev.get('source', '') == provider_source),
+                       ev_priority, abs(ev_start - air_epoch))
+                if best_key is None or key < best_key:
+                    best, best_key = ev, key
+            if best:
+                method = "channel+airtime_tz"
+            else:
+                # No programme starts at the airtime (off-boundary request):
+                # take the one airing at that instant. Never fall through to
+                # digits here — with a known tz they're exactly the bug.
+                for ev in candidates:
+                    ev_start = _normalize_start(ev.get('start'))
+                    ev_stop = _normalize_start(ev.get('stop'))
+                    if ev_start is None or ev_start > air_epoch:
+                        continue
+                    if ev_stop is not None and ev_stop <= air_epoch:
+                        continue
+                    if best is None or ev_start > best_start:
+                        best, best_start = ev, ev_start
+                if best:
+                    method = "channel+airtime_tz(airing)"
+            if best:
+                best_start = _normalize_start(best.get('start'))
+                best_priority = best.get('priority', 999)
 
         # Phase 1 (digit matching from timeshift URL airtime) — primary strategy.
         # When provider_source is known, prefer entries from that source to
         # avoid digit collisions between different-timezone EPG sources
         # (e.g. Nebula -0400 vs Veil +0000 both having digits '202603252000').
-        if best is None and air_digits is not None:
+        if best is None and air_digits is not None and air_epoch is None:
             source_match = None   # best match from same source as provider
             source_match_pri = 999
             any_match = None      # best match from any source (fallback)
@@ -589,6 +644,7 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
                     any_match_pri = ev_priority
             best = source_match or any_match
             if best:
+                method = "channel+digits"
                 best_start = _normalize_start(best.get('start'))
                 best_priority = best.get('priority', 999)
 
@@ -609,6 +665,7 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
                     best = ev
                     best_start = ev_start
                     best_priority = ev_priority
+                    method = "channel+download_ts"
 
         if best:
             break
@@ -631,7 +688,6 @@ async def cache_find_catchup(title, airtime=None, download_ts=None, epg_channel_
     if chan_key:
         meta.setdefault('channelClean', clean_channel_name(chan_key))
 
-    method = "epoch" if dl_epoch and air_digits else ("channel+digits" if epg_channel_id and air_digits else ("digits" if air_digits else "download_ts"))
     logger.debug(f"Catchup EPG lookup ({method}): matched",
                  f"channel={chan_key}, name={display}, "
                  f"title={_str(best.get('title'))}, "
@@ -1152,6 +1208,7 @@ async def notify(request: Request):
     epg_channel_id = None
     provider_channel_name = None
     provider_source_name = None
+    provider_tz = None
     if _xtream_cache and provider_domain and stream_id:
         # Run in thread to avoid blocking the event loop during cache refresh (~7s)
         epg_channel_id = await asyncio.to_thread(_xtream_cache.lookup, provider_domain, stream_id)
@@ -1161,12 +1218,21 @@ async def notify(request: Request):
             provider_channel_name = re.sub(r'^[A-Z]{2,3}\s*:\s*', '', raw_name).strip() or raw_name
         # Get the EPG source name (e.g. "Nebula") to prefer same-source EPG entries
         provider_source_name = await asyncio.to_thread(_xtream_cache.lookup_provider_name, provider_domain)
+        provider_tz = await asyncio.to_thread(_xtream_cache.lookup_timezone, provider_domain)
         if epg_channel_id:
             logger.debug("Xtream channel resolved",
-                         f"provider={provider_domain}, stream_id={stream_id}, epg_channel={epg_channel_id}, provider_name={provider_channel_name}, source={provider_source_name}")
+                         f"provider={provider_domain}, stream_id={stream_id}, epg_channel={epg_channel_id}, provider_name={provider_channel_name}, source={provider_source_name}, tz={provider_tz}")
 
-    if is_catchup and title:
-        meta = await cache_find_catchup(title, airtime=airtime, download_ts=start, epg_channel_id=epg_channel_id, provider_source=provider_source_name)
+    # Comskip events carry no channel/start of their own, only the originating
+    # job's stream meta. Match them the same channel-scoped way or not at all —
+    # a title-only lookup lands on whichever channel happens to air that title.
+    is_comskip = action.startswith('comskip_')
+
+    if is_comskip:
+        if epg_channel_id and title and (airtime or start):
+            meta = await cache_find_catchup(title, airtime=airtime, download_ts=start, epg_channel_id=epg_channel_id, provider_source=provider_source_name, provider_tz=provider_tz)
+    elif is_catchup and title:
+        meta = await cache_find_catchup(title, airtime=airtime, download_ts=start, epg_channel_id=epg_channel_id, provider_source=provider_source_name, provider_tz=provider_tz)
     elif epg_channel_id and title and start:
         # Exact EPG lookup using resolved channel ID (for live/scheduled recordings)
         meta = await cache_find_catchup(title, download_ts=start, epg_channel_id=epg_channel_id)
@@ -1180,7 +1246,7 @@ async def notify(request: Request):
             if alt_meta:
                 meta = alt_meta
             used_api = used_api or bool(alt_meta)
-    if not meta:
+    if not meta and not is_comskip:
         meta = await cache_find_program(channel_hint or channel_clean, title, start)
 
     # Debug: log EPG metadata found for catch-ups

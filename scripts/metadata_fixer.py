@@ -206,9 +206,11 @@ def _parse_airtime_digits(airtime_str):
 
     Returns 12-digit string like '202603252000' (YYYYMMDDHHmm) or None.
 
-    The timeshift URL encodes air time in the PROVIDER's local timezone
-    (e.g. Nebula uses EDT, Endurance uses UTC). The raw digits match the
-    provider's own EPG start time digits regardless of timezone offset.
+    The timeshift URL encodes air time in the PROVIDER's server timezone
+    (Xtream server_info.timezone, e.g. Europe/London for Veil and Endurance,
+    UTC for Nebula). Prefer _airtime_epoch() when that timezone is known; raw
+    digits are only a fallback and collide whenever the provider's timezone
+    differs from the EPG entry's offset.
     """
     if not airtime_str:
         return None
@@ -216,6 +218,20 @@ def _parse_airtime_digits(airtime_str):
     if not m:
         return None
     return f"{m.group(1)}{m.group(2)}{m.group(3)}{m.group(4)}{m.group(5)}"
+
+
+def _airtime_epoch(airtime_str, tz_name):
+    """Convert a timeshift airtime (YYYY-MM-DD:HH-MM) to a UTC epoch using the
+    provider's IANA timezone. Returns None if either is missing/invalid."""
+    digits = _parse_airtime_digits(airtime_str)
+    if not digits or not tz_name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.strptime(digits, "%Y%m%d%H%M").replace(tzinfo=ZoneInfo(tz_name))
+        return dt.timestamp()
+    except Exception:
+        return None
 
 
 def _epg_start_digits(raw_start):
@@ -268,13 +284,18 @@ def _parse_epg_timestamp(raw):
         return None
 
 
-def epg_lookup_channel(programme_name, download_ts="", airtime=None, epg_channel_id=None, meta_start=None, provider_source=None):
+def epg_lookup_channel(programme_name, download_ts="", airtime=None, epg_channel_id=None, meta_start=None, provider_source=None, provider_tz=None):
     """Look up channel_name, logo, and description from EPG cache by programme title.
 
     If *epg_channel_id* is provided (resolved from Xtream API via stream_id),
     filters to that exact channel. If *meta_start* is provided (the metadata's
     existing start_time), uses epoch matching first. If *airtime* is provided,
-    falls back to digit matching. Last resort: most-recent-before-download.
+    it is converted to an exact instant using *provider_tz* (the provider's
+    server_info.timezone), falling back to raw digit matching only when the
+    timezone is unknown. Last resort: most-recent-before-download.
+
+    When *epg_channel_id* resolves to a channel present in the EPG, only that
+    channel is searched — never other channels that share the title.
 
     Returns (channel_name, logo_url, description) or (None, None, None) if not found.
     """
@@ -287,27 +308,30 @@ def epg_lookup_channel(programme_name, download_ts="", airtime=None, epg_channel
         return None, None, None
 
     air_digits = _parse_airtime_digits(airtime) if airtime else None
+    air_epoch = _airtime_epoch(airtime, provider_tz) if airtime else None
     meta_epoch = _parse_epg_timestamp(meta_start) if meta_start else None
     dl_epoch = _parse_epg_timestamp(download_ts) if download_ts and not air_digits and not meta_epoch else None
 
     # Build candidate sets using indexes — O(1) lookups instead of scanning all programmes
     candidate_sets = []
-    if epg_channel_id:
-        chan_progs = by_channel.get(epg_channel_id.lower(), [])
-        if chan_progs:
-            # Try exact title match first
-            channel_filtered = [c for c in chan_progs if _normalize_title(c.get("title")) == title_norm]
-            if channel_filtered:
-                candidate_sets.append(channel_filtered)
-            elif air_digits is not None:
-                # Fallback: channel + airtime without title filter.
-                # When Xtream confirmed the channel and we have exact air time,
-                # trust that over title matching (titles may have unicode decoration).
-                candidate_sets.append(chan_progs)
-    # Fallback: title index
-    candidates = by_title.get(title_norm)
-    if candidates:
-        candidate_sets.append(candidates)
+    chan_progs = by_channel.get(epg_channel_id.lower(), []) if epg_channel_id else []
+    if chan_progs:
+        # Try exact title match first
+        channel_filtered = [c for c in chan_progs if _normalize_title(c.get("title")) == title_norm]
+        if channel_filtered:
+            candidate_sets.append(channel_filtered)
+        elif air_digits is not None:
+            # Fallback: channel + airtime without title filter.
+            # When Xtream confirmed the channel and we have exact air time,
+            # trust that over title matching (titles may have unicode decoration).
+            candidate_sets.append(chan_progs)
+    # Fallback: title index — only when the stream's channel is unknown.
+    # Searching every channel by title lets a same-titled show on another
+    # provider's channel win (wrong channel name and logo).
+    if not chan_progs:
+        candidates = by_title.get(title_norm)
+        if candidates:
+            candidate_sets.append(candidates)
 
     if not candidate_sets:
         return None, None, None
@@ -338,10 +362,40 @@ def epg_lookup_channel(programme_name, download_ts="", airtime=None, epg_channel
                         if prog_priority <= 1:
                             break
 
-        # Phase 2: raw digit comparison from timeshift URL airtime.
-        # Prefer entries from the same EPG source as the provider to avoid
-        # digit collisions between different-timezone sources.
-        if best is None and air_digits is not None:
+        # Phase 1b: timeshift airtime converted with the provider's timezone —
+        # an exact instant, so immune to EPG sources using a different offset.
+        if best is None and air_epoch is not None:
+            best_key = None
+            for prog in cands:
+                prog_epoch = _parse_epg_timestamp(prog.get("start"))
+                if prog_epoch is None or abs(prog_epoch - air_epoch) > 120:
+                    continue
+                prog_priority = prog.get("priority", 999)
+                if not isinstance(prog_priority, int):
+                    prog_priority = 999
+                key = (not (provider_source and prog.get("source", "") == provider_source),
+                       prog_priority, abs(prog_epoch - air_epoch))
+                if best_key is None or key < best_key:
+                    best, best_key = prog, key
+            if best is None:
+                # Off-boundary request: take the programme airing at that instant.
+                for prog in cands:
+                    prog_epoch = _parse_epg_timestamp(prog.get("start"))
+                    stop_epoch = _parse_epg_timestamp(prog.get("stop"))
+                    if prog_epoch is None or prog_epoch > air_epoch:
+                        continue
+                    if stop_epoch is not None and stop_epoch <= air_epoch:
+                        continue
+                    if best_start is None or prog_epoch > best_start:
+                        best, best_start = prog, prog_epoch
+            if best:
+                best_start = _parse_epg_timestamp(best.get("start"))
+                best_priority = best.get("priority", 999)
+
+        # Phase 2: raw digit comparison from timeshift URL airtime — only when
+        # the provider's timezone is unknown (digits collide across offsets).
+        # Prefer entries from the same EPG source as the provider.
+        if best is None and air_digits is not None and air_epoch is None:
             source_match = None
             source_match_pri = 999
             any_match = None
@@ -641,7 +695,8 @@ def fix_file(filepath):
             meta_start = None
         # Get EPG source name for same-source preference in digit matching
         provider_source = xtream_cache.lookup_provider_name(provider_domain) if xtream_cache and provider_domain else None
-        display_name, logo_url, epg_desc = epg_lookup_channel(prog_name, download_ts, airtime, epg_channel_id, meta_start=meta_start, provider_source=provider_source)
+        provider_tz = xtream_cache.lookup_timezone(provider_domain) if xtream_cache and provider_domain else None
+        display_name, logo_url, epg_desc = epg_lookup_channel(prog_name, download_ts, airtime, epg_channel_id, meta_start=meta_start, provider_source=provider_source, provider_tz=provider_tz)
         # Prefer provider-specific channel name over EPG display name
         if provider_channel_name:
             display_name = provider_channel_name
