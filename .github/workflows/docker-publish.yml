@@ -61,9 +61,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # FFMPEG_REFRESH busts the Dockerfile FFmpeg layer cache so every
-          # publish re-resolves the latest upstream FFmpeg stable release.
-          build-args: |
-            FFMPEG_REFRESH=${{ github.run_id }}
+          # FFmpeg is pinned by FFMPEG_VERSION in the Dockerfile, so its layer
+          # is reused from cache until the pin changes. Only bust it
+          # (FFMPEG_REFRESH=<new token>) when building with FFMPEG_VERSION=latest.
           cache-from: type=gha
           cache-to: type=gha,mode=max

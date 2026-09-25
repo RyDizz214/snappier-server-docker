@@ -25,9 +25,10 @@ FROM ubuntu:25.04 AS ffmpeg-build
 
 ARG DEBIAN_FRONTEND=noninteractive
 # Pinned rather than "latest" so a release builds the same FFmpeg every time.
-# 8.1.2 is the version this image's ffmpeg-wrapper.sh is tested against.
+# 9.0.1 is the version this image's ffmpeg-wrapper.sh is tested against
+# (it ran in production through the host-FFmpeg overlay before this pin).
 # Setting FFMPEG_VERSION=latest restores resolving the newest stable tarball.
-ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_VERSION=9.0.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates wget unzip xz-utils grep coreutils \
