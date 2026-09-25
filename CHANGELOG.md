@@ -6,7 +6,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Version numbers track the bundled Snappier Server CLI where practical: image
-`2.0.1` ships CLI `2.0.1-1`.
+`2.0.2` ships CLI `2.0.2-11`.
+
+## [2.0.2] — 2026-09-25
+
+Tracks upstream's 2.0.2 CLI. Nothing in this image changed besides the CLI.
+
+### Added
+
+- **Built-in VPN or proxy** (upstream CLI 2.0.2). Snappier Server can now
+  send everything it fetches from providers through WireGuard, a SOCKS5 proxy
+  or an HTTP proxy. You set it up in the dashboard under Settings → IPTV
+  Provider, and it is stored in the new `outbound_proxy_*` keys. **It is off
+  by default.** If you already use `docker-compose.vpn.yml` (gluetun), leave
+  it off, because turning it on as well puts provider traffic through two
+  tunnels.
+- Upstream now bundles `wireproxy` (v1.1.3, ISC licence) in the CLI
+  archive. The server starts it only when the built-in WireGuard option is on.
+- New `xtream_art_through_server` key, off by default. It loads channel logos,
+  posters and guide icons through the server.
+
+### Changed
+
+- Bundled Snappier Server CLI **2.0.2-11** (from 2.0.1-1). The CLI's embedded
+  runtime moves from Node.js 18.5 to **Node.js 24.18** (OpenSSL 3.0.5 → 3.5.7).
+  `--help` output is the same as 2.0.1. `--check-config` gives the same result
+  on an existing configuration, and `config.json` is not modified on upgrade.
+- FFmpeg stays at **9.0.1**.
 
 ## [2.0.1] — 2026-09-24
 

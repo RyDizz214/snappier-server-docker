@@ -5,7 +5,7 @@ an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
 Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
 required.
 
-Ships Snappier Server CLI **2.0.1-1** and FFmpeg **9.0.1**. See
+Ships Snappier Server CLI **2.0.2-11** and FFmpeg **9.0.1**. See
 [CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
 renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.
 
@@ -133,6 +133,11 @@ ProtonVPN, PIA, Surfshark, AirVPN, and more).
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
    ```
+
+Snappier Server 2.0.2 also has its own VPN/proxy setting (dashboard:
+Settings → IPTV Provider → *Send provider traffic through a VPN or proxy*). It
+is off by default. Use either that or the gluetun overlay above, not both —
+turning it on under gluetun puts provider traffic through two tunnels.
 
 ---
 
