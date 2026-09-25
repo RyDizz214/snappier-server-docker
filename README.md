@@ -5,7 +5,7 @@ an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
 Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
 required.
 
-Ships Snappier Server CLI **2.0.0-2** and FFmpeg **8.1.2**. See
+Ships Snappier Server CLI **2.0.1-1** and FFmpeg **9.0.1**. See
 [CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
 renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.
 
@@ -74,7 +74,7 @@ docker logs snappier-server | grep -i token
 
 Everything below is already in the image — no extra setup needed:
 
-- **FFmpeg 8.1.2** (built from source with x264/x265/fdk-aac/vpx/opus).
+- **FFmpeg 9.0.1** (built from source with x264/x265/fdk-aac/vpx/opus).
   **You do NOT need to install FFmpeg on the host** — it's inside the
   container.
 - **Recording optimisations:** smart HLS playback, catch-up (timeshift)
@@ -223,8 +223,9 @@ docker compose up -d
 ```
 
 The Dockerfile handles both `amd64` and `arm64` automatically via Docker's
-`TARGETARCH`. The FFmpeg build stage pulls the latest upstream stable release
-at build time.
+`TARGETARCH`. The FFmpeg build stage compiles the pinned version (9.0.1); pass
+`--build-arg FFMPEG_VERSION=latest` to build the newest upstream stable
+instead.
 
 </details>
 

@@ -6,7 +6,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Version numbers track the bundled Snappier Server CLI where practical: image
-`2.0.0` ships CLI `2.0.0-2`.
+`2.0.1` ships CLI `2.0.1-1`.
+
+## [2.0.1] — 2026-09-24
+
+A point release: upstream's 2.0.1 CLI, FFmpeg 9, and two fixes to how
+recordings are matched to the programme guide.
+
+### Added
+
+- **Support log** (upstream CLI 2.0.1). `--support-log [1|6|24]`, or the
+  dashboard's Settings → Server → Logging → Support log, writes a redacted
+  `snappier-support-log-<REF>.txt` covering the last 1, 6 or 24 hours to the
+  logs folder and exits without starting the server — safe to attach to a bug
+  report.
+
+### Changed
+
+- Bundled Snappier Server CLI **2.0.1-1** (from 2.0.0-2). No configuration
+  changes; `config.json` is not modified on upgrade. The rest of upstream's
+  delta is catalog-source documentation and dashboard wording.
+- **FFmpeg 9.0.1** (from 8.1.2), still pinned. The wrapper ran against 9.0.1
+  in production before this pin moved.
+- CI no longer rebuilds FFmpeg on every run. Now that the version is pinned,
+  the cached layer is reused until the pin changes.
+
+### Fixed
+
+- **Catch-ups reported with the wrong programme and air time.** Providers put
+  the air time in timeshift URLs in their own server timezone (Europe/London
+  for some, UTC for others, following DST), and it was compared digit-for-digit
+  against guide entries that may use a different offset. A catch-up could match
+  the show an hour either side, so the notification, `.meta.json` and
+  dashboard showed the wrong title, description and time. The provider's
+  timezone is now read from its Xtream `server_info` and the air time is
+  matched as an exact instant. Providers that report no timezone keep the old
+  behaviour.
+- **Recordings shown with another channel's name and logo.** When a
+  recording's own channel had no matching guide entry, the metadata fixer
+  searched every channel for the same title and could pick another provider's
+  channel. It now only does that when the recording's channel is unknown.
+- **Channel guessed by title for some recordings.** If the stream details were
+  missed when a recording started (e.g. the container restarted mid-recording),
+  the completion notification fell back to guessing the channel by title and
+  could show an unrelated channel's logo. They are now re-read at completion.
+  Comskip notifications carry the recording's stream details too, and are never
+  matched by title alone.
 
 ## [2.0.0] — 2026-09-20
 
@@ -164,6 +209,7 @@ watch progress point at. Worth knowing:
 - Timezone is no longer forced.
 - `schedules.json` and `server.log` mounts were consolidated.
 
+[2.0.1]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.1
 [2.0.0]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.0
 [1.5.1]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v1.5.1
 [1.5.0]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v1.5.0
