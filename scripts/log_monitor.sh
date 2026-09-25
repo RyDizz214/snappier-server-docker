@@ -102,7 +102,7 @@ post_action() {
     # Use -f to fail on HTTP errors, capture output and exit code
     # Increase timeout for actions that do EPG/TMDB enrichment (metadata lookups take time)
     local timeout=12  # Default 12s (uvicorn timeout-keep-alive is 30s)
-    if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* || "$action" == recording_completed ]]; then
+    if [[ "$action" == movie_* || "$action" == series_* || "$action" == catchup_* || "$action" == comskip_* || "$action" == recording_completed ]]; then
       timeout=45  # Accommodate Xtream cache refresh (~7s) + EPG cache reload (~18s) + enrichment
       max_attempts=2  # Reduce retries since timeout is higher
     fi
@@ -143,11 +143,48 @@ post_action() {
 trim(){ sed 's/^[[:space:]]*//;s/[[:space:]]*$//' ; }
 
 # Append stream metadata (airtime, provider_domain, stream_id) to an args array
+# Fill JOB_AIRTIME / JOB_PROVIDER / JOB_STREAM_ID for a job from the ffmpeg
+# wrapper log. For catch-ups the timeshift URL has airtime + provider +
+# stream_id; for live recordings the live URL has provider + stream_id.
+# The stream_id resolves to an exact EPG channel via the Xtream API cache.
+# Usage: load_stream_meta job_id_full
+load_stream_meta() {
+  local job="$1" wrapper_log line provider sid air
+  [[ -z "$job" ]] && return 0
+  wrapper_log="${FFMPEG_WRAPPER_LOG:-/root/SnappierServer/logs/ffmpeg_wrapper.log}"
+  [[ -f "$wrapper_log" ]] || return 0
+  # Search from end of file — the job UUID will be in recent lines. Only lines
+  # carrying the stream URL: later lines for the job (remux etc.) have none.
+  line="$(tac "$wrapper_log" 2>/dev/null | grep -F "$job" | grep -m1 -E '/(timeshift|live)/' || true)"
+  [[ -z "$line" ]] && return 0
+  provider="$(echo "$line" | grep -oP 'https?://\K[^/]+(?=/(timeshift|live)/)' | sed 's/:[0-9]*$//' || true)"
+  air="$(echo "$line" | grep -oP '/timeshift/[^/]+/[^/]+/\d+/\K\d{4}-\d{2}-\d{2}:\d{2}-\d{2}' || true)"
+  # Last numeric segment before .ts:
+  #   Timeshift: /timeshift/user/pass/dur/airtime/STREAM_ID.ts
+  #   Live:      /live/user/pass/STREAM_ID.ts
+  sid="$(echo "$line" | grep -oP '/(?:timeshift|live)/.*?/(\d+)\.ts' | grep -oP '/(\d+)\.ts$' | grep -oP '\d+' || true)"
+  if [[ -n "$air" ]]; then
+    JOB_AIRTIME["$job"]="$air"
+    log "Extracted timeshift info: airtime=$air provider=$provider stream_id=$sid (job: $job)"
+  elif [[ -n "$provider" || -n "$sid" ]]; then
+    log "Extracted stream info: provider=$provider stream_id=$sid (job: $job)"
+  fi
+  [[ -n "$provider" ]] && JOB_PROVIDER["$job"]="$provider"
+  [[ -n "$sid" ]] && JOB_STREAM_ID["$job"]="$sid"
+  return 0
+}
+
 # Usage: append_stream_meta args_name job_id
 append_stream_meta() {
   local -n _arr="$1"
   local _job="$2"
   [[ -z "$_job" ]] && return 0
+  # Start-time capture can miss (event read before ffmpeg logged its URL, or a
+  # container restart mid-recording). Without stream meta the webhook can only
+  # guess the channel by title, so re-read the wrapper log now.
+  if [[ -z "${JOB_STREAM_ID[$_job]:-}" ]]; then
+    load_stream_meta "$_job"
+  fi
   if [[ -n "${JOB_AIRTIME[$_job]:-}" ]]; then
     _arr+=(airtime "${JOB_AIRTIME[$_job]}")
   fi
@@ -1067,37 +1104,10 @@ while IFS= read -r line; do
     # For live recordings: live URL has provider + stream_id
     # The stream_id resolves to an exact EPG channel via the Xtream API cache.
     if [[ -n "$job_id_full" ]]; then
-      WRAPPER_LOG="${FFMPEG_WRAPPER_LOG:-/root/SnappierServer/logs/ffmpeg_wrapper.log}"
-      if [[ -f "$WRAPPER_LOG" ]]; then
-        # Search from end of file — the job UUID will be in recent lines
-        wrapper_line="$(tac "$WRAPPER_LOG" 2>/dev/null | grep -m1 "$job_id_full" || true)"
-        if [[ -n "$wrapper_line" ]]; then
-          # Extract provider domain from timeshift or live URL
-          provider_domain="$(echo "$wrapper_line" | grep -oP 'https?://\K[^/]+(?=/(timeshift|live)/)' | sed 's/:[0-9]*$//' || true)"
-          # Extract airtime from timeshift URL (catch-ups only)
-          airtime_raw="$(echo "$wrapper_line" | grep -oP '/timeshift/[^/]+/[^/]+/\d+/\K\d{4}-\d{2}-\d{2}:\d{2}-\d{2}' || true)"
-          # Extract stream_id — last numeric segment before .ts in the URL
-          # Timeshift: /timeshift/user/pass/dur/airtime/STREAM_ID.ts
-          # Live:      /live/user/pass/STREAM_ID.ts
-          stream_id="$(echo "$wrapper_line" | grep -oP '/(?:timeshift|live)/.*?/(\d+)\.ts' | grep -oP '/(\d+)\.ts$' | grep -oP '\d+' || true)"
-
-          if [[ -n "$airtime_raw" ]]; then
-            payload_args+=(airtime "$airtime_raw")
-            JOB_AIRTIME["$job_id_full"]="$airtime_raw"
-            log "Extracted timeshift info: airtime=$airtime_raw provider=$provider_domain stream_id=$stream_id (job: $job_id_full)"
-          elif [[ -n "$provider_domain" || -n "$stream_id" ]]; then
-            log "Extracted stream info: provider=$provider_domain stream_id=$stream_id (job: $job_id_full)"
-          fi
-          if [[ -n "$provider_domain" ]]; then
-            payload_args+=(provider_domain "$provider_domain")
-            JOB_PROVIDER["$job_id_full"]="$provider_domain"
-          fi
-          if [[ -n "$stream_id" ]]; then
-            payload_args+=(stream_id "$stream_id")
-            JOB_STREAM_ID["$job_id_full"]="$stream_id"
-          fi
-        fi
-      fi
+      load_stream_meta "$job_id_full"
+      [[ -n "${JOB_AIRTIME[$job_id_full]:-}" ]] && payload_args+=(airtime "${JOB_AIRTIME[$job_id_full]}")
+      [[ -n "${JOB_PROVIDER[$job_id_full]:-}" ]] && payload_args+=(provider_domain "${JOB_PROVIDER[$job_id_full]}")
+      [[ -n "${JOB_STREAM_ID[$job_id_full]:-}" ]] && payload_args+=(stream_id "${JOB_STREAM_ID[$job_id_full]}")
     fi
 
     if [[ "$action" == "recording_started" && -n "$job_id_full" ]]; then
@@ -1496,6 +1506,9 @@ recover_orphan_sidecars()
     declare -a payload_args=(exit_code "$code" edl "$edl" file "$file")
     if [[ -n "$uuid" ]]; then
       payload_args+=(job_id "$(shorten_job "$uuid")" job_id_full "$uuid")
+      # Lets the webhook resolve the real channel/airtime (catch-up filenames
+      # have no channel segment, so otherwise it can only guess by title).
+      append_stream_meta payload_args "$uuid"
     fi
     [[ -n "$program" ]] && payload_args+=(program "$program")
     [[ -n "$channel" ]] && payload_args+=(channel "$channel")
