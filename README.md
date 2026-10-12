@@ -5,7 +5,7 @@ an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
 Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
 required.
 
-Ships Snappier Server CLI **2.0.2-11** and FFmpeg **9.0.1**. See
+Ships Snappier Server CLI **2.0.4-9** and FFmpeg **9.0.1**. See
 [CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
 renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.
 
