@@ -11,10 +11,10 @@
 #   docker compose build                                    # built-in ffmpeg, native arch
 #   docker compose build --build-arg USE_HOST_FFMPEG=true   # host ffmpeg (x86-64 only)
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     --push -t ghcr.io/<you>/snappier-server:2.0.2 .       # multi-arch publish
+#     --push -t ghcr.io/<you>/snappier-server:2.0.4-9 .       # multi-arch publish
 ########################################
 
-ARG SNAPPIER_SERVER_VERSION=2.0.2-11
+ARG SNAPPIER_SERVER_VERSION=2.0.4-9
 ARG USE_HOST_FFMPEG=false
 
 ########################################
