@@ -36,6 +36,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A CLI-build release (v2.0.4-9) is a semver pre-release to
+      # metadata-action, which then skips {{major}}.{{minor}}. Emit the base
+      # (2.0.4) and minor (2.0) tags for it here.
+      - name: Compute CLI-build tags
+        id: clitags
+        run: |
+          ref="${GITHUB_REF_NAME:-}"
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          if [[ "$ref" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-[0-9]+$ ]]; then
+            echo "type=raw,value=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+            echo "type=raw,value=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
@@ -43,6 +57,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           # Tag strategy:
           #   - push tag v1.5.0  -> :1.5.0, :1.5, :latest
+          #   - push tag v2.0.4-9 -> :2.0.4-9, :2.0.4, :2.0, :latest
           #   - push to main     -> :main (NEVER touches :latest)
           #   - manual dispatch  -> whatever `inputs.tag` is, plus the normal tags
           tags: |
@@ -51,6 +66,7 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+            ${{ steps.clitags.outputs.tags }}
 
       - name: Build & push (linux/amd64, linux/arm64)
         uses: docker/build-push-action@v6
