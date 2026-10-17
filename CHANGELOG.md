@@ -10,9 +10,26 @@ where practical (image `2.0.2` ships CLI `2.0.2-11`); from 2.0.4 onward the
 image version matches the CLI version exactly, so image `2.0.4-9` ships CLI
 `2.0.4-9`.
 
-## [2.0.4-9] — 2026-10-12
+## [2.0.4-9] — 2026-10-12 (image rebuilt 2026-10-17)
 
-Tracks upstream's 2.0.4 CLI. Nothing in this image changed besides the CLI.
+Tracks upstream's 2.0.4 CLI. The image was rebuilt on 2026-10-17 on Ubuntu
+26.04 LTS. The version number stays the same because it matches the bundled
+CLI, which has not changed.
+
+### About Snappier Server
+
+Snappier Server is a **companion add-on for the Snappier IPTV app** (Apple TV,
+iPhone, iPad). It is not a stand-alone player. It records, gathers channels,
+films and shows into one playlist, and supplies the TV guide. You watch in the
+Snappier IPTV app.
+
+### Removed
+
+- **In-browser playback in the dashboard** (upstream CLI 2.0.4). The
+  dashboard no longer has a video player. The bundled `hls.js` player is gone
+  from the CLI. Playback belongs in the Snappier IPTV app, which Snappier
+  Server is built to support. The dashboard is now for setup and management,
+  and its setup wizard ends by connecting the Snappier IPTV app.
 
 ### Added
 
@@ -29,6 +46,17 @@ Tracks upstream's 2.0.4 CLI. Nothing in this image changed besides the CLI.
   result on an existing configuration, and `config.json` is not modified on
   upgrade.
 - FFmpeg stays at **9.0.1**.
+- **Base image moves from Ubuntu 25.04 to Ubuntu 26.04 LTS** (2026-10-17
+  rebuild). Ubuntu 25.04 reached end of life in January 2026 and gets no
+  more security updates. 26.04 is supported until 2031. Python in the image
+  goes from 3.13 to 3.14. Comskip is now built against Ubuntu's FFmpeg 8.0
+  libraries. The bundled FFmpeg used for recording is still 9.0.1.
+- Comskip is patched at build time to compile against FFmpeg 8, which removed
+  a field Comskip relied on (upstream issue #186). Commercial detection
+  results are unchanged.
+- x265 (the H.265 encoder in the bundled FFmpeg) moves from 3.5 to **4.2**,
+  now built from the maintained upstream source. The old source no longer
+  builds with the CMake in Ubuntu 26.04.
 
 ## [2.0.2] — 2026-09-25
 

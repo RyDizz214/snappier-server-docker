@@ -1,11 +1,18 @@
 # Snappier Server — Docker
 
 A ready-to-run Docker setup for [Snappier Server](https://snappierserver.app),
-an IPTV DVR / recording server. Pre-built Linux images are published to GitHub
-Container Registry for Intel/AMD (`amd64`) and ARM (`arm64`) — no building
-required.
+the companion server for the **Snappier IPTV** app on Apple TV, iPhone and
+iPad. Pre-built Linux images are published to GitHub Container Registry for
+Intel/AMD (`amd64`) and ARM (`arm64`) — no building required.
 
-Ships Snappier Server CLI **2.0.4-9** and FFmpeg **9.0.1**. See
+> **Snappier Server is an add-on for the Snappier IPTV app, not a stand-alone
+> player.** It records, gathers your channels, films and shows into one
+> playlist, and supplies the TV guide. You watch everything in the Snappier
+> IPTV app. Since CLI 2.0.4 the web dashboard no longer plays video in the
+> browser; it is for setup and management only.
+
+Ships Snappier Server CLI **2.0.4-9** and FFmpeg **9.0.1** on Ubuntu **26.04
+LTS**. See
 [CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
 renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.
 
@@ -40,6 +47,10 @@ to `docker-compose.yml`.
 ---
 
 ## Open the Web UI
+
+The Web UI (dashboard) is where you set Snappier Server up and manage it:
+providers, the TV guide, recordings and settings. It also walks you through
+connecting the Snappier IPTV app. It does not play video; watch in the app.
 
 On the **same machine** running Docker:
 
@@ -77,8 +88,9 @@ Everything below is already in the image — no extra setup needed:
 - **FFmpeg 9.0.1** (built from source with x264/x265/fdk-aac/vpx/opus).
   **You do NOT need to install FFmpeg on the host** — it's inside the
   container.
-- **Recording optimisations:** smart HLS playback, catch-up (timeshift)
-  extension, automatic retry if a remux fails.
+- **Recording optimisations:** HLS streams from H.264 sources are copied
+  instead of re-encoded, catch-up (timeshift) extension, automatic retry if a
+  remux fails.
 - **Notifications:** a webhook that fires on every recording event. Plug in
   Pushover keys to get push notifications on your phone (see below).
 - **Background helpers** that keep metadata tidy, monitor health, and cache
