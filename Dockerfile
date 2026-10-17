@@ -21,7 +21,7 @@ ARG USE_HOST_FFMPEG=false
 # Stage 1: Build FFmpeg and codec libraries from source
 # (BuildKit skips this entirely when USE_HOST_FFMPEG=true)
 ########################################
-FROM ubuntu:25.04 AS ffmpeg-build
+FROM ubuntu:26.04 AS ffmpeg-build
 
 ARG DEBIAN_FRONTEND=noninteractive
 # Pinned rather than "latest" so a release builds the same FFmpeg every time.
@@ -47,7 +47,10 @@ RUN git clone --depth=1 https://code.videolan.org/videolan/x264.git /tmp/x264 \
  && make -j"$(nproc)" && make install
 
 # x265 (static) + pkg-config metadata
-RUN git clone --depth=1 https://github.com/videolan/x265.git /tmp/x265 \
+# From the maintained upstream, pinned. The github.com/videolan/x265 mirror is
+# frozen at 3.5-era sources that CMake 4 (Ubuntu 26.04) refuses to configure.
+ARG X265_VERSION=4.2
+RUN git clone --depth=1 --branch "${X265_VERSION}" https://bitbucket.org/multicoreware/x265_git.git /tmp/x265 \
  && cd /tmp/x265/build/linux \
  && cmake -G "Unix Makefiles" \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -63,7 +66,7 @@ RUN git clone --depth=1 https://github.com/videolan/x265.git /tmp/x265 \
     echo ''; \
     echo 'Name: x265'; \
     echo 'Description: H.265/HEVC video encoder'; \
-    echo 'Version: 3.5'; \
+    echo "Version: ${X265_VERSION}"; \
     echo 'Libs: -L${libdir} -lx265 -lstdc++ -lm -lpthread -ldl -lnuma'; \
     echo 'Cflags: -I${includedir}'; \
  } > /usr/local/lib/pkgconfig/x265.pc \
@@ -127,9 +130,9 @@ RUN set -eux; \
 # runs here: the upstream desktop bundle links against FFmpeg 4.x shared
 # objects that no current container base provides. Build it against this
 # base's own FFmpeg packages instead, and install the matching runtime libs
-# in the final stage. Built on the same ubuntu:25.04 as runtime-base so the
+# in the final stage. Built on the same ubuntu:26.04 as runtime-base so the
 # libav* ABI agrees.
-FROM ubuntu:25.04 AS comskip-build
+FROM ubuntu:26.04 AS comskip-build
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -140,8 +143,19 @@ RUN apt-get update \
       libsdl2-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# FFmpeg 8 removed AVCodecContext.ticks_per_frame, which Comskip still uses
+# (upstream issue #186). Replace it with what FFmpeg documents as its
+# successor: 2 for codecs flagged AV_CODEC_PROP_FIELDS, else 1. MPEG-1 carries
+# that flag but Comskip always forced it to 1, so keep that exception. (The
+# open upstream PR #187 multiplies by the raw flag bit, 16, which is wrong.)
 RUN git clone --depth=1 https://github.com/erikkaashoek/Comskip.git /tmp/comskip \
  && cd /tmp/comskip \
+ && sed -i -e '/codec_id == AV_CODEC_ID_MPEG1VIDEO)/{N;/ticks_per_frame = 1;/d}' \
+      -e 's/is->dec_ctx->ticks_per_frame/COMSKIP_TICKS_PER_FRAME(is->dec_ctx)/g' \
+      -e '/#include <libavcodec\/avcodec.h>/a #define COMSKIP_TICKS_PER_FRAME(c) (((c)->codec_id != AV_CODEC_ID_MPEG1VIDEO \&\& (c)->codec_descriptor \&\& ((c)->codec_descriptor->props \& AV_CODEC_PROP_FIELDS)) ? 2 : 1)' \
+      mpeg2dec.c \
+ && grep -q '^#define COMSKIP_TICKS_PER_FRAME' mpeg2dec.c \
+ && ! grep -n 'TICKS_PER_FRAME(is->dec_ctx) = 1' mpeg2dec.c \
  && ./autogen.sh \
  && ./configure --bindir=/usr/local/bin \
  && make -j"$(nproc)" comskip \
@@ -151,7 +165,7 @@ RUN git clone --depth=1 https://github.com/erikkaashoek/Comskip.git /tmp/comskip
 ########################################
 # Stage 2: Common runtime base
 ########################################
-FROM ubuntu:25.04 AS runtime-base
+FROM ubuntu:26.04 AS runtime-base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -159,11 +173,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     curl jq ca-certificates tzdata tini procps inotify-tools iproute2 coreutils \
     unzip \
-    libssl3 \
+    libssl3t64 \
     libxcb1 libxcb-shm0 libxcb-shape0 libxcb-xfixes0 \
     libx11-6 libxext6 libxrender1 libxfixes3 libxi6 libxrandr2 \
     libnuma1 libstdc++6 \
-    libass9 libfreetype6 libfribidi0 libharfbuzz0b libfontconfig1 libpng16-16 \
+    libass9 libfreetype6 libfribidi0 libharfbuzz0b libfontconfig1 libpng16-16t64 \
     fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
@@ -256,7 +270,7 @@ RUN chmod +x /usr/local/bin/ffmpeg \
 # the ones comskip was compiled against in stage 1b.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libargtable2-0 libavformat61 libavcodec61 libavutil59 libswscale8 \
+      libargtable2-0 libavformat62 libavcodec62 libavutil60 libswscale9 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=comskip-build /usr/local/bin/comskip /usr/local/bin/comskip.real
 COPY scripts/comskip-wrapper.sh /usr/local/bin/comskip
