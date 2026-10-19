@@ -1,11 +1,12 @@
 name: Build & publish multi-arch image to GHCR
 
+# Release tags only. A push to main isn't built: a release pushes main and its
+# tag together, and building both ran the same multi-hour build twice.
+# Run the workflow manually to build a branch (publishes :<branch>).
 on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       tag:
@@ -58,8 +59,7 @@ jobs:
           # Tag strategy:
           #   - push tag v1.5.0  -> :1.5.0, :1.5, :latest
           #   - push tag v2.0.4-9 -> :2.0.4-9, :2.0.4, :2.0, :latest
-          #   - push to main     -> :main (NEVER touches :latest)
-          #   - manual dispatch  -> whatever `inputs.tag` is, plus the normal tags
+          #   - manual dispatch  -> :<branch>, plus `inputs.tag` if given (NEVER touches :latest)
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
