@@ -11,7 +11,7 @@ Intel/AMD (`amd64`) and ARM (`arm64`) — no building required.
 > IPTV app. Since CLI 2.0.4 the web dashboard no longer plays video in the
 > browser; it is for setup and management only.
 
-Ships Snappier Server CLI **2.0.4-9** and FFmpeg **9.0.1** on Ubuntu **26.04
+Ships Snappier Server CLI **2.0.5-9** and FFmpeg **9.0.1** on Ubuntu **26.04
 LTS**. See
 [CHANGELOG.md](CHANGELOG.md) for what changed and for upgrade notes — 2.0.0
 renames `CATCHUP_BUFFER_SECONDS` to `CATCHUP_BUFFER_MINUTES`.

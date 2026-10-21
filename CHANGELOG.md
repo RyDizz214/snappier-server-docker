@@ -10,6 +10,24 @@ where practical (image `2.0.2` ships CLI `2.0.2-11`); from 2.0.4 onward the
 image version matches the CLI version exactly, so image `2.0.4-9` ships CLI
 `2.0.4-9`.
 
+## [2.0.5-9] — 2026-10-21
+
+Tracks upstream's 2.0.5 CLI. Nothing in this image changed besides the CLI.
+
+### Added
+
+- **`--max-downloads <count>`** (upstream CLI 2.0.5-9). Sets how many films
+  and episodes download at once. The default is 1, and 0 means no limit. This
+  image does not pass the flag, so the CLI default applies.
+
+### Changed
+
+- Bundled Snappier Server CLI **2.0.5-9** (from 2.0.4-9). Apart from the new
+  flag, the release contains upstream changes that were not visible in the
+  options, settings or `--help` output. `--check-config` gives the same result
+  on an existing configuration, and `config.json` is not modified on upgrade.
+- FFmpeg stays at **9.0.1**, on Ubuntu 26.04 LTS.
+
 ## [2.0.4-9] — 2026-10-12 (image rebuilt 2026-10-17)
 
 Tracks upstream's 2.0.4 CLI. The image was rebuilt on 2026-10-17 on Ubuntu
@@ -285,6 +303,7 @@ watch progress point at. Worth knowing:
 - Timezone is no longer forced.
 - `schedules.json` and `server.log` mounts were consolidated.
 
+[2.0.5-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.5-9
 [2.0.4-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.4-9
 [2.0.1]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.1
 [2.0.0]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.0
