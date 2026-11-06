@@ -10,6 +10,34 @@ where practical (image `2.0.2` ships CLI `2.0.2-11`); from 2.0.4 onward the
 image version matches the CLI version exactly, so image `2.0.4-9` ships CLI
 `2.0.4-9`.
 
+## [2.0.6-17] — 2026-11-06
+
+Tracks upstream's 2.0.6 CLI. Nothing in this image changed besides the CLI.
+
+### Added
+
+- **`--log-keep <count>`** (upstream CLI 2.0.6-17). Sets how many old log
+  files the server keeps; older ones are deleted. The default is 10, and 0
+  keeps all of them. This image does not pass the flag, so the CLI default
+  applies.
+
+### Changed
+
+- Bundled Snappier Server CLI **2.0.6-17** (from 2.0.5-9). Apart from the new
+  flag, the release contains upstream changes that were not visible in the
+  options, settings or `--help` output. `config.json` is not modified on
+  upgrade.
+- `--check-config` still reports no errors or warnings on an existing
+  configuration, but adds one note. When `trust_proxy` trusts the forwarded
+  address from whatever connects, a client can choose its own address if it
+  can bypass the proxy or the proxy passes `X-Forwarded-For` on unchanged. The
+  note suggests the proxy's address instead, e.g. `"loopback"` or
+  `"172.16.0.0/12"`.
+- The `stream_auth` note in `--check-config` now says which URLs it covers:
+  recording, download and HLS-proxy URLs do not expire, and playlist live
+  channels, films and episodes are never signed.
+- FFmpeg stays at **9.0.1**, on Ubuntu 26.04 LTS.
+
 ## [2.0.5-9] — 2026-10-21
 
 Tracks upstream's 2.0.5 CLI. Nothing in this image changed besides the CLI.
@@ -303,6 +331,7 @@ watch progress point at. Worth knowing:
 - Timezone is no longer forced.
 - `schedules.json` and `server.log` mounts were consolidated.
 
+[2.0.6-17]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.6-17
 [2.0.5-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.5-9
 [2.0.4-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.4-9
 [2.0.1]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.1
