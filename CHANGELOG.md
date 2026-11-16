@@ -10,6 +10,28 @@ where practical (image `2.0.2` ships CLI `2.0.2-11`); from 2.0.4 onward the
 image version matches the CLI version exactly, so image `2.0.4-9` ships CLI
 `2.0.4-9`.
 
+## [2.0.6-24] — 2026-11-16
+
+Tracks upstream's 2.0.6 CLI. Nothing in this image changed besides the CLI.
+
+### Added
+
+- **`trust_certificate`** for media servers (upstream CLI 2.0.6-24). For a
+  Plex, Emby, Jellyfin or Silo server with a self-signed certificate, add
+  `"trust_certificate": true` to its entry in `plex_servers` in `config.json`.
+  The server records the certificate the media server presents at the next
+  start (or when the file is saved while it runs), and after that accepts only
+  that certificate. The same option is in the dashboard under Settings → Media
+  Server → Edit, and `--help` now describes it.
+
+### Changed
+
+- Bundled Snappier Server CLI **2.0.6-24** (from 2.0.6-17). Apart from the new
+  setting, the release contains upstream changes that were not visible in the
+  options, settings or `--help` output. `--check-config` gives the same result
+  on an existing configuration, and `config.json` is not modified on upgrade.
+- FFmpeg stays at **9.0.1**, on Ubuntu 26.04 LTS.
+
 ## [2.0.6-17] — 2026-11-06
 
 Tracks upstream's 2.0.6 CLI. Nothing in this image changed besides the CLI.
@@ -331,6 +353,7 @@ watch progress point at. Worth knowing:
 - Timezone is no longer forced.
 - `schedules.json` and `server.log` mounts were consolidated.
 
+[2.0.6-24]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.6-24
 [2.0.6-17]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.6-17
 [2.0.5-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.5-9
 [2.0.4-9]: https://github.com/RyDizz214/snappier-server-docker/releases/tag/v2.0.4-9
